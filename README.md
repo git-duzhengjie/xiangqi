@@ -101,6 +101,9 @@ git tag v1.0.0 && git push origin v1.0.0
 
 详见 [发布流程](docs/%E5%8F%91%E5%B8%83%E6%B5%81%E7%A8%8B.md)。
 
+CI 产物下载后如何装入插件目录、以及手动摆放的四个坑，
+见 [CI 产物处理](docs/CI%E4%BA%A7%E7%89%A9%E5%A4%84%E7%90%86.md)（推荐直接用 `scripts\install-artifact.ps1` 一键安装）。
+
 本机开发路径、目录职责、以及哪些文件不入库但构建必需，
 见 [本地开发环境](docs/%E6%9C%AC%E5%9C%B0%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83.md)。
 

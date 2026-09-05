@@ -5,7 +5,8 @@
 //
 
 #import <Foundation/Foundation.h>
-#import <DCUniModule.h>
+#import "DCUniModule.h"
+#import "DCUniDefine.h"   // UNI_EXPORT_METHOD / UniModuleKeepAliveCallback
 
 @interface XiangqiEngineModule : DCUniModule
 

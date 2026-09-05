@@ -44,12 +44,19 @@ SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
 MIN_IOS=13.0
 
 # ---------- compile bridge sources ----------
-# DCUniModule.h comes from the uni-app SDK and is NOT available here,
-# so XiangqiEngineModule.m cannot be compiled in CI. We compile the
-# engine-facing bridge only; the uni-app module source is shipped as-is
-# and gets compiled by DCloud's cloud build.
+# Both the engine bridge and the uni-app module class are compiled here.
+# XiangqiEngineModule.m needs uni-app SDK headers, vendored (headers only)
+# under native/ios/uni-sdk-headers so CI can build the module class.
+# Without it the framework ships without XiangqiEngineModule and
+# uni.requireNativePlugin('XiangqiEngine') returns null at runtime.
 OBJDIR="$OUT/fw-obj"
 rm -rf "$OBJDIR"; mkdir -p "$OBJDIR"
+
+SDKINC="$IOSDIR/uni-sdk-headers"
+if [ ! -f "$SDKINC/DCUniDefine.h" ]; then
+    echo "ERROR: $SDKINC/DCUniDefine.h not found (uni-app SDK headers missing)."
+    exit 1
+fi
 
 echo "--> compiling PikafishBridge.mm"
 # Flags must match build_ios.sh: the bridge includes engine headers,
@@ -75,10 +82,33 @@ if [ ! -f "$OBJDIR/PikafishBridge.o" ]; then
     exit 1
 fi
 
+echo "--> compiling XiangqiEngineModule.m"
+# ObjC (not ObjC++): the module only talks to PikafishBridge's ObjC API.
+# -fmodules is intentionally OFF: the vendored headers are plain headers
+# with no modulemap, and modules would try to resolve them as frameworks.
+xcrun --sdk iphoneos clang \
+    -target arm64-apple-ios${MIN_IOS} \
+    -isysroot "$SYSROOT" \
+    -fobjc-arc -O2 -DNDEBUG \
+    -I"$IOSDIR" -I"$SDKINC" \
+    -c "$IOSDIR/XiangqiEngineModule.m" \
+    -o "$OBJDIR/XiangqiEngineModule.o" 2> "$OBJDIR/module.log" || {
+        echo "COMPILE FAILED: XiangqiEngineModule.m"
+        echo "---------------- compiler output ----------------"
+        cat "$OBJDIR/module.log"
+        echo "------------------------------------------------"
+        exit 1
+    }
+
+if [ ! -f "$OBJDIR/XiangqiEngineModule.o" ]; then
+    echo "ERROR: XiangqiEngineModule.o was not produced"
+    exit 1
+fi
+
 # ---------- merge engine lib + bridge object ----------
 echo "--> merging static libraries"
 cp "$DEVICE_LIB" "$OUT/libXiangqiEngine.a"
-xcrun --sdk iphoneos ar r "$OUT/libXiangqiEngine.a" "$OBJDIR/PikafishBridge.o"
+xcrun --sdk iphoneos ar r "$OUT/libXiangqiEngine.a" "$OBJDIR/PikafishBridge.o" "$OBJDIR/XiangqiEngineModule.o"
 xcrun --sdk iphoneos ranlib "$OUT/libXiangqiEngine.a"
 
 # ---------- place binary + headers ----------
@@ -141,7 +171,7 @@ if [ "$FW_SIZE" -lt 1000000 ]; then
     exit 1
 fi
 
-for sym in PikafishBridge pikafish_main; do
+for sym in PikafishBridge pikafish_main XiangqiEngineModule wx_export_method_; do
     # Same pipefail + grep -q trap as in build_ios.sh: grep -q exits early,
     # nm dies with SIGPIPE, and a PRESENT symbol gets misreported as missing.
     # Capture output first, then count.

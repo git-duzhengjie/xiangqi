@@ -111,7 +111,6 @@ cat > "$FW/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>MinimumOSVersion</key>
-    <key>MinimumOSVersion</key>
     <string>13.0</string>
 </dict>
 </plist>

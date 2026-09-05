@@ -146,10 +146,17 @@ if [ "$FW_SIZE" -lt 1000000 ]; then
 fi
 
 for sym in PikafishBridge pikafish_main; do
-    if nm "$FW/XiangqiEngine" 2>/dev/null | grep -q "$sym"; then
-        echo "symbol $sym: OK"
+    # Same pipefail + grep -q trap as in build_ios.sh: grep -q exits early,
+    # nm dies with SIGPIPE, and a PRESENT symbol gets misreported as missing.
+    # Capture output first, then count.
+    FW_SYMS=$(nm "$FW/XiangqiEngine" 2>/dev/null || true)
+    HITS=$(printf '%s\n' "$FW_SYMS" | grep -c "$sym" || true)
+    if [ "$HITS" -gt 0 ]; then
+        echo "symbol $sym: OK ($HITS match)"
     else
         echo "ERROR: symbol $sym missing"
+        echo "--- defined text symbols (first 40) ---"
+        printf '%s\n' "$FW_SYMS" | grep -E ' [TtSs] ' | head -40 || true
         exit 1
     fi
 done

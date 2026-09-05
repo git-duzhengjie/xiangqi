@@ -218,10 +218,28 @@ build_arch() {
     fi
 
     # ---- assert entry symbol ----
-    if xcrun --sdk "$SDK" nm "$LIB" 2>/dev/null | grep -q 'pikafish_main'; then
-        echo "--> symbol pikafish_main: OK"
+    #  NOTE: do NOT write `nm "$LIB" | grep -q sym` here.
+    #  Under `set -o pipefail`, grep -q exits as soon as it finds a match,
+    #  nm then dies with SIGPIPE, the whole pipeline returns non-zero and a
+    #  PRESENT symbol is misreported as MISSING. This actually happened:
+    #  36/36 objects compiled, 1888K archive, yet the check failed.
+    #  Capture the output first, then count with grep -c.
+    local SYMS
+    SYMS=$(xcrun --sdk "$SDK" nm -g "$LIB" 2>/dev/null || true)
+
+    # Mach-O prefixes C symbols with an underscore, so accept both forms.
+    local HITS
+    HITS=$(printf '%s\n' "$SYMS" | grep -c -E '[TtSs] _?pikafish_main$' || true)
+    if [ "$HITS" -eq 0 ]; then
+        HITS=$(printf '%s\n' "$SYMS" | grep -c 'pikafish_main' || true)
+    fi
+
+    if [ "$HITS" -gt 0 ]; then
+        echo "--> symbol pikafish_main: OK ($HITS match)"
     else
         echo "ERROR: symbol pikafish_main missing from $LIB"
+        echo "--- defined text symbols (first 40) ---"
+        printf '%s\n' "$SYMS" | grep -E ' [TtSs] ' | head -40 || true
         exit 1
     fi
 }

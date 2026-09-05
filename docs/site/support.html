@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>技术支持 - 中国象棋</title>
+<style>
+  :root { --red:#be1e2d; --dark:#3c2a20; }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:0;
+    font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:#2b2b2b; background:#f7f4ef;
+  }
+  header {
+    background:linear-gradient(135deg,var(--dark),#5c402e);
+    color:#fff; padding:40px 20px; text-align:center;
+  }
+  header h1 { margin:0 0 8px; font-size:26px; }
+  header p { margin:0; opacity:.8; font-size:14px; }
+  main { max-width:760px; margin:0 auto; padding:28px 20px 60px; }
+  .card {
+    background:#fff; border-radius:10px; padding:22px 24px; margin-bottom:18px;
+    box-shadow:0 1px 3px rgba(0,0,0,.08);
+  }
+  h2 {
+    font-size:19px; margin:0 0 12px; padding-left:12px;
+    border-left:4px solid var(--red);
+  }
+  h3 { font-size:16px; margin:18px 0 6px; color:var(--dark); }
+  h3:first-of-type { margin-top:4px; }
+  .contact {
+    background:#fff8e6; border:1px solid #f0d9a0;
+    border-radius:8px; padding:18px 20px; margin-bottom:18px;
+  }
+  .btn {
+    display:inline-block; background:var(--red); color:#fff;
+    padding:10px 22px; border-radius:6px; text-decoration:none;
+    margin:6px 8px 6px 0; font-size:15px;
+  }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:15px; }
+  th,td { border:1px solid #e4ded5; padding:9px 12px; text-align:left; }
+  th { background:#f2ece3; }
+  ul,ol { padding-left:22px; margin:8px 0; }
+  li { margin:5px 0; }
+  a { color:var(--red); }
+  code {
+    background:#f2ece3; padding:2px 6px; border-radius:4px; font-size:14px;
+  }
+  footer {
+    text-align:center; color:#8b8378; font-size:13px;
+    padding:24px 20px 40px; border-top:1px solid #e4ded5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>技术支持</h1>
+  <p>中国象棋（Xiangqi）· 遇到问题请看这里</p>
+</header>
+
+<main>
+
+  <div class="contact">
+    <h2 style="border:none;padding:0;margin-bottom:10px">联系方式</h2>
+    <p style="margin:0 0 10px">
+      问题反馈、Bug 报告、功能建议，都欢迎通过 GitHub Issues 提交。
+      通常会在 <strong>3 个工作日内</strong>回复。
+    </p>
+    <a class="btn" href="https://github.com/git-duzhengjie/xiangqi/issues/new">提交问题反馈</a>
+    <a class="btn" href="https://github.com/git-duzhengjie/xiangqi">查看项目主页</a>
+  </div>
+
+  <div class="card">
+    <h2>常见问题</h2>
+
+    <h3>为什么第一次进入对局要下载文件？</h3>
+    <p>本应用的 AI 使用开源引擎 <strong>Pikafish</strong>，它需要一个约 49 MB 的算法权重文件
+       （称为 NNUE）才能发挥完整棋力。为了不让安装包变得臃肿，这个文件改为首次使用时下载。
+       下载一次即永久保存，之后启动无需联网。</p>
+
+    <h3>下载失败怎么办？</h3>
+    <p>应用内置了 3 个下载源（官方 + 2 个国内镜像），会自动依次重试。若全部失败，请尝试：</p>
+    <ol>
+      <li>检查网络是否正常，建议切换到 Wi-Fi</li>
+      <li>稍后重试，镜像站点可能临时波动</li>
+      <li>如持续失败，请<a href="https://github.com/git-duzhengjie/xiangqi/issues/new">提交 Issue</a>并附上错误提示</li>
+    </ol>
+
+    <h3>可以不下载吗？</h3>
+    <p>可以。拒绝下载后棋盘与走棋规则完全可用，只是 AI 棋力会受限。
+       您也可以之后在设置中随时下载。</p>
+
+    <h3>AI 太强 / 太弱怎么调整？</h3>
+    <p>返回首页可选择难度等级。等级越高，AI 思考越深、棋力越强。
+       如果觉得「棋神」难度过高，建议从中等难度开始。</p>
+
+    <h3>AI 思考很慢是正常的吗？</h3>
+    <p>高难度下 AI 需要更长的计算时间，这是正常现象。若长时间无响应（超过 1 分钟），
+       请尝试重启应用；仍有问题请反馈给我们。</p>
+
+    <h3>棋局会自动保存吗？</h3>
+    <p>会。当前棋局进度保存在本机，退出后重进可继续。所有数据都不会上传。</p>
+
+    <h3>应用会收集我的个人信息吗？</h3>
+    <p>不会。本应用不收集任何个人信息，没有账号系统，也没有广告和统计 SDK。
+       详见<a href="./privacy.html">隐私政策</a>。</p>
+
+    <h3>有广告或内购吗？</h3>
+    <p>没有。本应用完全免费，无广告、无内购、无任何付费项目。</p>
+  </div>
+
+  <div class="card">
+    <h2>系统要求</h2>
+    <table>
+      <tr><th>平台</th><th>最低版本</th></tr>
+      <tr><td>iOS / iPadOS</td><td>iOS 13.0 及以上</td></tr>
+      <tr><td>Android</td><td>Android 5.0 及以上（arm64 设备）</td></tr>
+    </table>
+    <p>首次下载引擎权重需约 49 MB 流量与存储空间。</p>
+  </div>
+
+  <div class="card">
+    <h2>报告问题时请提供</h2>
+    <p>为了更快定位问题，反馈时麻烦附上以下信息：</p>
+    <ul>
+      <li>设备型号与系统版本（如 iPhone 14 / iOS 17.2）</li>
+      <li>应用版本号</li>
+      <li>问题的具体表现，以及复现步骤</li>
+      <li>如有报错文字或截图，请一并附上</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>关于本应用</h2>
+    <p>中国象棋是一款<strong>完全免费、无广告</strong>的单机象棋对弈应用，
+       AI 由开源引擎 <a href="https://github.com/official-pikafish/Pikafish">Pikafish</a> 驱动。</p>
+    <p>本应用源代码依据 <strong>GPL-3.0</strong> 协议完整开源，欢迎查阅与监督：</p>
+    <p><a href="https://github.com/git-duzhengjie/xiangqi">github.com/git-duzhengjie/xiangqi</a></p>
+  </div>
+
+</main>
+
+<footer>
+  中国象棋 · 基于 Pikafish 开源引擎 · GPL-3.0<br>
+  <a href="./index.html">首页</a> ·
+  <a href="./privacy.html">隐私政策</a>
+</footer>
+
+</body>
+</html>

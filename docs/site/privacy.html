@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 - 中国象棋</title>
+<style>
+  :root { --red:#be1e2d; --dark:#3c2a20; }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:0;
+    font:16px/1.8 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:#2b2b2b; background:#f7f4ef;
+  }
+  header {
+    background:linear-gradient(135deg,var(--dark),#5c402e);
+    color:#fff; padding:40px 20px; text-align:center;
+  }
+  header h1 { margin:0 0 8px; font-size:26px; }
+  header p { margin:0; opacity:.8; font-size:14px; }
+  main { max-width:760px; margin:0 auto; padding:28px 20px 60px; }
+  .card {
+    background:#fff; border-radius:10px; padding:22px 24px; margin-bottom:18px;
+    box-shadow:0 1px 3px rgba(0,0,0,.08);
+  }
+  h2 {
+    font-size:19px; margin:0 0 12px; padding-left:12px;
+    border-left:4px solid var(--red);
+  }
+  .highlight {
+    background:#fff8e6; border:1px solid #f0d9a0;
+    border-radius:8px; padding:16px 20px; margin-bottom:18px;
+  }
+  .highlight strong { color:var(--red); }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:15px; }
+  th,td { border:1px solid #e4ded5; padding:9px 12px; text-align:left; }
+  th { background:#f2ece3; }
+  code {
+    background:#f2ece3; padding:2px 6px; border-radius:4px;
+    font-size:14px; word-break:break-all;
+  }
+  ul { padding-left:22px; margin:8px 0; }
+  li { margin:5px 0; }
+  a { color:var(--red); }
+  footer {
+    text-align:center; color:#8b8378; font-size:13px;
+    padding:24px 20px 40px; border-top:1px solid #e4ded5;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>隐私政策</h1>
+  <p>中国象棋（Xiangqi）· 最后更新：2026 年 9 月 5 日</p>
+</header>
+
+<main>
+
+  <div class="highlight">
+    <p style="margin:0">
+      <strong>一句话说明：本应用不收集、不存储、不上传您的任何个人信息。</strong><br>
+      没有账号系统，没有广告，没有第三方统计或追踪 SDK。
+      所有棋局数据都只保存在您自己的设备上。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>一、我们不收集任何个人信息</h2>
+    <p>本应用是一款完全单机运行的中国象棋对弈程序。我们<strong>不会</strong>收集下列任何信息：</p>
+    <ul>
+      <li>姓名、手机号、邮箱、身份证等身份信息</li>
+      <li>位置信息、通讯录、相册、麦克风、摄像头</li>
+      <li>设备标识符（IDFA / IMEI / MAC 地址等）</li>
+      <li>使用习惯、点击行为等统计数据</li>
+      <li>棋局记录、对战成绩（仅存于本机，不会上传）</li>
+    </ul>
+    <p>本应用<strong>没有账号注册与登录功能</strong>，因此从技术上不存在可识别您身份的数据。</p>
+  </div>
+
+  <div class="card">
+    <h2>二、应用申请的权限</h2>
+    <table>
+      <tr><th>权限</th><th>用途</th><th>是否必需</th></tr>
+      <tr>
+        <td>网络访问</td>
+        <td>仅用于首次下载 AI 引擎的算法权重文件（约 49 MB）</td>
+        <td>可拒绝，拒绝后仍可正常下棋</td>
+      </tr>
+    </table>
+    <p>除网络访问外，本应用<strong>未申请任何其他系统权限</strong>。</p>
+  </div>
+
+  <div class="card">
+    <h2>三、唯一的网络请求</h2>
+    <p>本应用的 AI 由开源引擎 <strong>Pikafish</strong> 驱动，需要一个算法权重文件（NNUE）才能发挥完整棋力。
+       该文件体积较大，为避免安装包过于臃肿，改为在您<strong>主动确认后</strong>才下载。</p>
+    <p>下载地址（均为公开的开源项目发布页，按顺序自动重试）：</p>
+    <ul>
+      <li><code>github.com/official-pikafish/Networks</code>（官方发布页）</li>
+      <li><code>ghfast.top</code>（国内加速镜像）</li>
+      <li><code>gh-proxy.com</code>（国内加速镜像）</li>
+    </ul>
+    <p>这是一次<strong>单向下载</strong>请求：只向服务器索取文件，
+       <strong>不会附带、不会上传您的任何信息</strong>。文件下载后保存在应用私有目录，
+       后续启动直接复用，不再联网。</p>
+    <p>请注意：上述镜像站点由第三方运营，其访问日志（如 IP 地址）行为不受我们控制。
+       您也可以拒绝下载，App 仍可正常使用。</p>
+  </div>
+
+  <div class="card">
+    <h2>四、数据存储位置</h2>
+    <p>本应用会在设备本地保存以下内容，<strong>全部不出设备</strong>：</p>
+    <ul>
+      <li>AI 引擎权重文件（下载后缓存，可在应用内删除）</li>
+      <li>难度等级等偏好设置</li>
+      <li>当前棋局进度</li>
+    </ul>
+    <p>卸载应用即会一并清除上述所有数据，云端无任何残留。</p>
+  </div>
+
+  <div class="card">
+    <h2>五、无广告、无第三方 SDK</h2>
+    <p>本应用<strong>不含任何广告代码</strong>，也未集成任何第三方广告、统计、崩溃分析或推送 SDK。
+       应用配置中已明确关闭 IDFA（广告标识符）采集。</p>
+  </div>
+
+  <div class="card">
+    <h2>六、儿童隐私</h2>
+    <p>本应用为纯棋类游戏，内容适合所有年龄段。由于不收集任何个人信息，
+       亦不存在针对儿童的数据处理行为。</p>
+  </div>
+
+  <div class="card">
+    <h2>七、开源与可验证</h2>
+    <p>本应用完整源代码依据 <strong>GPL-3.0</strong> 协议公开，
+       您可自行查阅代码，核实本政策所述的每一条内容：</p>
+    <p><a href="https://github.com/git-duzhengjie/xiangqi">github.com/git-duzhengjie/xiangqi</a></p>
+  </div>
+
+  <div class="card">
+    <h2>八、政策变更</h2>
+    <p>若本政策有更新，我们会修改本页面顶部的「最后更新」日期。
+       涉及重大变更时，会在应用内明确提示。</p>
+  </div>
+
+  <div class="card">
+    <h2>九、联系我们</h2>
+    <p>对隐私问题有任何疑问，欢迎通过 GitHub Issues 反馈：</p>
+    <p><a href="https://github.com/git-duzhengjie/xiangqi/issues">提交 Issue</a></p>
+  </div>
+
+</main>
+
+<footer>
+  中国象棋 · 基于 Pikafish 开源引擎 · GPL-3.0<br>
+  <a href="./index.html">首页</a> ·
+  <a href="./support.html">技术支持</a>
+</footer>
+
+</body>
+</html>

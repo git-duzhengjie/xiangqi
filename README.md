@@ -101,6 +101,9 @@ git tag v1.0.0 && git push origin v1.0.0
 
 详见 [发布流程](docs/%E5%8F%91%E5%B8%83%E6%B5%81%E7%A8%8B.md)。
 
+本机开发路径、目录职责、以及哪些文件不入库但构建必需，
+见 [本地开发环境](docs/%E6%9C%AC%E5%9C%B0%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83.md)。
+
 CI 已内置两道校验：ELF 架构正确性、JNI 符号完整导出（后者漏了会在运行时才报
 `UnsatisfiedLinkError`，极难排查）。
 

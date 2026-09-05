@@ -17,9 +17,20 @@ $ErrorActionPreference = 'Continue'
 
 $NDK  = 'D:\Android\ndk\27.1.12297006'
 $TC   = Join-Path $NDK 'toolchains\llvm\prebuilt\windows-x86_64\bin'
-$ROOT = 'D:\projects\xiangqi-app'
+
+# Derive the repo root from this script's own location instead of hard-coding
+# an absolute path. The previous value 'D:\projects\xiangqi-app' broke when the
+# repository was moved to D:\projects\xiangqi.
+# This file lives at <root>\native\android\build_so.ps1, so go up two levels.
+$ROOT = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $SRC  = Join-Path $ROOT 'engine-src\src'
 $JNID = Join-Path $ROOT 'native\android\jni'
+
+if (-not (Test-Path $SRC)) {
+    Write-Host "ERROR: engine source not found at $SRC" -ForegroundColor Red
+    Write-Host "Run scripts\fetch-engine.ps1 first." -ForegroundColor Yellow
+    exit 1
+}
 
 # --- per-ABI toolchain & flags ---
 switch ($Abi) {
@@ -34,8 +45,9 @@ switch ($Abi) {
     }
     'x86_64' {
         $CXX   = Join-Path $TC 'x86_64-linux-android29-clang++.cmd'
-        # ZSTD_DISABLE_ASM: zstd 的 huf_decompress_amd64.S 为手写汇编，
-        # 不参与本脚本的 .cpp 收集，故禁用汇编路径改用 C 实现（性能影响可忽略）
+        # ZSTD_DISABLE_ASM: zstd's huf_decompress_amd64.S is hand-written assembly
+        # and is not among the .cpp files this script collects, so disable the
+        # asm path and use the C implementation instead (perf impact negligible).
         $ARCHF = @('-DIS_64BIT','-DUSE_SSE41','-DUSE_SSSE3','-DUSE_SSE2','-DUSE_POPCNT','-msse4.1','-mpopcnt','-DZSTD_DISABLE_ASM=1')
     }
 }

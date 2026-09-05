@@ -31,24 +31,28 @@ const os = require('os');
 const repoRoot = path.resolve(__dirname, '..');
 const stubDir = path.join(repoRoot, 'native', 'android', 'stubs');
 
-// 【重要】Java 源码在仓库里有两份副本：
-//   native/android/java/...             ← CI 组装插件时的拷贝源头
-//   app/nativeplugins/XiangqiEngine/... ← 本地 HBuilderX 实际使用的
-// 曾因只改了 app 下那份、没改 native 源头，导致 CI 产物里仍是旧代码，
-// 装上去依旧报错，白白排查很久。故两份都编译，并强制校验内容一致。
-const SRC_DIRS = [
-  {
-    label: 'native 源头 (CI 使用)',
-    dir: path.join(repoRoot, 'native', 'android', 'java'),
-  },
-  {
-    label: 'app 插件目录 (本地使用)',
-    dir: path.join(
-      repoRoot, 'app', 'nativeplugins', 'XiangqiEngine',
-      'android', 'src', 'main', 'java'
-    ),
-  },
-];
+// 【目录职责】根据 .gitignore 的明确设计：
+//   native/android/java/...            ← 源码的【唯一权威位置】，入库，CI 使用
+//   app/nativeplugins/XiangqiEngine/.. ← 已组装的插件目录，属于构建产物，
+//                                        已被 gitignore，CI 环境根本不存在
+//
+// 因此 native 下那份必须存在且必须编译通过；
+// app 下那份只在本地存在时才检查 —— 它是开发机上实际运行的副本，
+// 若与 native 不一致，会出现“改了源头但本地跑的还是旧插件”的假象，
+// 所以本地仍要做一致性比对并提醒重新安装。
+const NATIVE_SRC = {
+  label: 'native 源头 (权威位置)',
+  dir: path.join(repoRoot, 'native', 'android', 'java'),
+  required: true,
+};
+const PLUGIN_SRC = {
+  label: 'app 插件目录 (本地产物)',
+  dir: path.join(
+    repoRoot, 'app', 'nativeplugins', 'XiangqiEngine',
+    'android', 'src', 'main', 'java'
+  ),
+  required: false,
+};
 
 function collectJava(dir) {
   const out = [];
@@ -75,18 +79,25 @@ if (!fs.existsSync(stubDir)) fail(`桩类目录不存在: ${stubDir}`);
 
 const stubs = collectJava(stubDir);
 
-let totalSrc = 0;
-for (const s of SRC_DIRS) {
-  if (!fs.existsSync(s.dir)) fail(`源码目录不存在: ${s.dir}`);
-  s.files = collectJava(s.dir);
-  if (s.files.length === 0) fail(`${s.label} 下未找到 Java 源文件`);
-  totalSrc += s.files.length;
-}
+// native 源头：必须存在
+if (!fs.existsSync(NATIVE_SRC.dir)) fail(`源码目录不存在: ${NATIVE_SRC.dir}`);
+NATIVE_SRC.files = collectJava(NATIVE_SRC.dir);
+if (NATIVE_SRC.files.length === 0) fail(`${NATIVE_SRC.label} 下未找到 Java 源文件`);
+
+// app 插件副本：可选（CI 上被 gitignore，根本不存在）
+const hasPlugin = fs.existsSync(PLUGIN_SRC.dir);
+PLUGIN_SRC.files = hasPlugin ? collectJava(PLUGIN_SRC.dir) : [];
+
+const COMPILE_TARGETS = [NATIVE_SRC];
+if (hasPlugin && PLUGIN_SRC.files.length > 0) COMPILE_TARGETS.push(PLUGIN_SRC);
 
 console.log(`  桩类文件   : ${stubs.length}`);
-SRC_DIRS.forEach(s => {
-  console.log(`  ${s.label} : ${s.files.length} 个文件`);
-});
+console.log(`  ${NATIVE_SRC.label} : ${NATIVE_SRC.files.length} 个文件`);
+console.log(
+  hasPlugin && PLUGIN_SRC.files.length > 0
+    ? `  ${PLUGIN_SRC.label} : ${PLUGIN_SRC.files.length} 个文件`
+    : `  ${PLUGIN_SRC.label} : 未安装，跳过（CI 环境属正常）`
+);
 
 // 关键防呆：桩类里绝不能出现 optString，
 // 否则会把真实的 API 误用「合法化」，让校验形同虚设。
@@ -104,29 +115,35 @@ if (fs.existsSync(fastjsonStub)) {
   console.log('  桩类防呆   : OK (未声明 optString)');
 }
 
-// 一致性校验：两份副本同名文件内容必须完全相同，
-// 否则“本地正常但 CI 产物是旧代码”的坑会反复出现。
+// 一致性校验：仅在本地（app 插件已安装）时做。
+// 目的是防止“改了 native 源头但本地跑的还是旧插件”，
+// 那会让人误以为修复无效。
 console.log('');
-console.log('  —— 双副本一致性校验 ——');
-const [a, b] = SRC_DIRS;
-const rel = (base, f) => path.relative(base, f).replace(/\\/g, '/');
-const mapA = new Map(a.files.map(f => [rel(a.dir, f), f]));
-const mapB = new Map(b.files.map(f => [rel(b.dir, f), f]));
+if (hasPlugin && PLUGIN_SRC.files.length > 0) {
+  console.log('  —— 源头与本地插件一致性校验 ——');
+  const rel = (base, f) => path.relative(base, f).replace(/\\/g, '/');
+  const mapA = new Map(NATIVE_SRC.files.map(f => [rel(NATIVE_SRC.dir, f), f]));
+  const mapB = new Map(PLUGIN_SRC.files.map(f => [rel(PLUGIN_SRC.dir, f), f]));
 
-const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
-let diffCount = 0;
-for (const k of [...allKeys].sort()) {
-  if (!mapA.has(k)) { console.log(`    [缺失] native 源头缺: ${k}`); diffCount++; continue; }
-  if (!mapB.has(k)) { console.log(`    [缺失] app 插件目录缺: ${k}`); diffCount++; continue; }
-  const ta = fs.readFileSync(mapA.get(k), 'utf8').replace(/\r\n/g, '\n');
-  const tb = fs.readFileSync(mapB.get(k), 'utf8').replace(/\r\n/g, '\n');
-  if (ta !== tb) { console.log(`    [不一致] ${k}`); diffCount++; }
-  else console.log(`    [OK] ${k}`);
-}
-if (diffCount > 0) {
-  fail(`两份 Java 副本有 ${diffCount} 处不一致。`
-     + '请保持 native/android/java 与 app/nativeplugins/.../java 完全同步，'
-     + '否则 CI 打出的插件会是旧代码。');
+  const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+  let diffCount = 0;
+  for (const k of [...allKeys].sort()) {
+    if (!mapA.has(k)) { console.log(`    [异常] native 源头缺: ${k}`); diffCount++; continue; }
+    if (!mapB.has(k)) { console.log(`    [过时] 本地插件缺: ${k}`); diffCount++; continue; }
+    const ta = fs.readFileSync(mapA.get(k), 'utf8').replace(/\r\n/g, '\n');
+    const tb = fs.readFileSync(mapB.get(k), 'utf8').replace(/\r\n/g, '\n');
+    if (ta !== tb) { console.log(`    [过时] ${k}`); diffCount++; }
+    else console.log(`    [OK] ${k}`);
+  }
+  if (diffCount > 0) {
+    console.log('');
+    console.log(`  [提醒] 本地插件有 ${diffCount} 处与源头不一致。`);
+    console.log('         native/ 是唯一权威位置，请重跑 CI 并用');
+    console.log('         scripts/install-artifact.ps1 重新安装插件，');
+    console.log('         否则本地跑的仍是旧代码，会让人误以为修复无效。');
+  }
+} else {
+  console.log('  —— 跳过一致性校验（本地未安装插件）——');
 }
 
 const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xqjavac-'));
@@ -134,7 +151,7 @@ const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xqjavac-'));
 let ok = true;
 let produced = true;
 
-for (const s of SRC_DIRS) {
+for (const s of COMPILE_TARGETS) {
   console.log('');
   console.log(`  —— 编译 ${s.label} ——`);
   const dst = path.join(outDir, s.label.replace(/[^\w]/g, '_'));

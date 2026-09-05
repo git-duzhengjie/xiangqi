@@ -33,7 +33,12 @@ SRC="$ROOT/engine-src/src"
 JNIDIR="$ROOT/native/android/jni"      # engine_main.cpp lives here, reused by iOS
 OUT="$ROOT/build/ios"
 
-MIN_IOS=12.0
+# iOS 13.0 is the MINIMUM, do not lower it.
+# Pikafish uses std::filesystem::path (misc.h / engine.h / nnue/network.h),
+# which Apple marked as "introduced in iOS 13.0". Targeting 12.0 makes
+# libc++ mark path as unavailable and 24 of 36 translation units fail with
+# "'path' is unavailable: introduced in iOS 13.0".
+MIN_IOS=13.0
 # Minimum acceptable archive size. A correct build is ~2MB+; the broken
 # run produced 119K, so 1MB is a safe floor.
 MIN_SIZE_BYTES=1000000

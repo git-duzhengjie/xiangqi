@@ -42,7 +42,8 @@ mkdir -p "$FW/Headers"
 mkdir -p "$FW/Modules"
 
 SYSROOT=$(xcrun --sdk iphoneos --show-sdk-path)
-MIN_IOS=12.0
+# Must match build_ios.sh. iOS 13.0 is required by std::filesystem::path.
+MIN_IOS=13.0
 
 # ---------- compile bridge sources ----------
 # DCUniModule.h comes from the uni-app SDK and is NOT available here,
@@ -113,7 +114,8 @@ cat > "$FW/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>MinimumOSVersion</key>
-    <string>12.0</string>
+    <key>MinimumOSVersion</key>
+    <string>13.0</string>
 </dict>
 </plist>
 PLIST

@@ -14,6 +14,7 @@
  */
 
 import { DIFFICULTY_LEVELS } from './constants.js'
+import { getLocalNnue, downloadNnue } from './nnue.js'
 
 const PLUGIN_NAME = 'XiangqiEngine'
 
@@ -42,14 +43,42 @@ class XiangqiEngine {
 
   /**
    * 初始化引擎
-   * @returns {Promise<{success:boolean, error?:string}>}
+   *
+   * 权重获取策略（官方权重已涨至约 49MB，打进包会超云打包免费额度）：
+   *   1. 已下载过 -> 直接用本地文件
+   *   2. 未下载且 autoDownload 为 true -> 先下载再初始化
+   *   3. 未下载且不允许自动下载 -> 返回 needDownload，由 UI 决定何时下载
+   *
+   * @param {{autoDownload?:boolean, onProgress?:(p:number)=>void}} opts
+   * @returns {Promise<{success:boolean, error?:string, needDownload?:boolean}>}
    */
-  init() {
-    return new Promise(resolve => {
+  init(opts = {}) {
+    return new Promise(async resolve => {
       const p = this._getPlugin()
       if (!p) {
         resolve({ success: false, error: '原生插件不可用（请使用自定义基座运行）' })
         return
+      }
+
+      // ---- 准备权重 ----
+      let nnuePath = ''
+      try {
+        const cached = await getLocalNnue()
+        if (cached) {
+          nnuePath = cached
+        } else if (opts.autoDownload) {
+          const dl = await downloadNnue(opts.onProgress)
+          if (!dl.success) {
+            resolve({ success: false, needDownload: true, error: dl.error })
+            return
+          }
+          nnuePath = dl.path
+        }
+        // nnuePath 为空时不直接报错：插件里可能内置了权重（开发阶段），
+        // 交由原生层回退判定，它找不到才会回传 needDownload。
+      } catch (e) {
+        // 权重准备失败不应阻止尝试初始化，仍给原生层一次机会
+        nnuePath = ''
       }
 
       // 注册输出监听：收集 MultiPV 候选 + 透传 info
@@ -58,7 +87,7 @@ class XiangqiEngine {
         this._handleLine(res.line)
       })
 
-      p.initEngine(res => {
+      p.initEngine({ nnuePath }, res => {
         this.inited = !!(res && res.success)
         if (this.inited) {
           // 线程数按设备核心数，留一个核给 UI

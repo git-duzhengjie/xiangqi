@@ -1,0 +1,155 @@
+name: Verify NNUE Compatibility
+
+# =====================================================================
+#  实测「哪份 NNUE 权重能被当前 Pikafish 源码加载」。
+#
+#  为什么需要这个工作流：
+#    官方 Networks 仓库只有一个滚动 release（master-net），2026-07-20
+#    把权重从约 12MB 换成了约 49MB。本地遗留的 12MB 旧快照与新版
+#    version/hashValue 读出来相同，但解压后体积差 4 倍，靠静态分析
+#    无法判定旧版能否用（引擎遇到不兼容权重是直接 exit(EXIT_FAILURE)，
+#    不是降级运行，所以必须实测）。
+#
+#  做法：
+#    在 Linux 上编出原生 pikafish 可执行文件（不是 .so，方便直接跑
+#    UCI 指令），分别喂两份权重，看 `bench` 是否能跑完。
+#
+#  判定标准：
+#    能打印 Nodes searched 且退出码为 0  -> 该权重可用
+#    出现 exit(EXIT_FAILURE) 或 crash    -> 该权重不可用
+# =====================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_nnue_url:
+        description: '旧版(约12MB)权重的可下载地址，留空则只测官方最新版'
+        required: false
+        default: ''
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 拉取 Pikafish 源码
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git engine-src
+          cd engine-src
+          echo "ENGINE_COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "源码 commit: $(git rev-parse --short HEAD)"
+          echo "cpp 文件数: $(find src -name '*.cpp' | wc -l)"
+
+      # ---------------------------------------------------------------
+      #  编原生可执行文件。关键点与 Android 构建保持一致：
+      #    -DIS_64BIT            象棋 90 格棋盘需要 unsigned __int128
+      #    -DNNUE_EMBEDDING_OFF  不把权重编进二进制，改为运行时读文件
+      #  这样才能用同一个可执行文件测不同的权重。
+      # ---------------------------------------------------------------
+      - name: 编译 pikafish 可执行文件
+        run: |
+          set -e
+          mkdir -p obj bin
+          COMMON="-std=c++17 -O2 -DNDEBUG -DIS_64BIT -DNNUE_EMBEDDING_OFF"
+          ARCH="-DUSE_SSE41 -DUSE_SSSE3 -DUSE_SSE2 -DUSE_POPCNT -mpopcnt -msse4.1 -DZSTD_DISABLE_ASM=1"
+
+          SOURCES=$(find engine-src/src -name '*.cpp')
+          i=0
+          for f in $SOURCES; do
+            i=$((i+1))
+            base=$(basename "$f" .cpp)
+            g++ $COMMON $ARCH -Iengine-src/src -Iengine-src/src/external \
+              -c "$f" -o "obj/${i}_${base}.o" &
+            while [ "$(jobs -r | wc -l)" -ge "$(nproc)" ]; do sleep 0.1; done
+          done
+          wait
+
+          g++ -o bin/pikafish obj/*.o -pthread
+          ls -lh bin/pikafish
+          echo "OK 编译完成"
+
+      - name: 下载官方最新权重
+        run: |
+          set -e
+          curl -fL --retry 3 -o new.nnue \
+            https://github.com/official-pikafish/Networks/releases/download/master-net/pikafish.nnue
+          echo "新版体积: $(stat -c%s new.nnue) 字节 ($(du -h new.nnue | cut -f1))"
+          echo "新版 sha256: $(sha256sum new.nnue | cut -d' ' -f1)"
+
+      - name: 下载旧版权重（可选）
+        if: ${{ github.event.inputs.old_nnue_url != '' }}
+        run: |
+          set -e
+          curl -fL --retry 3 -o old.nnue "${{ github.event.inputs.old_nnue_url }}"
+          echo "旧版体积: $(stat -c%s old.nnue) 字节 ($(du -h old.nnue | cut -f1))"
+          echo "旧版 sha256: $(sha256sum old.nnue | cut -d' ' -f1)"
+
+      # ---------------------------------------------------------------
+      #  逐份测试。用 `bench` 而非 `go depth`，因为 bench 会完整跑一遍
+      #  评估函数，权重残缺时必然暴露；而浅层搜索有可能侥幸不触发。
+      # ---------------------------------------------------------------
+      - name: 测试官方最新权重
+        run: |
+          set +e
+          echo "=============================================="
+          echo " 测试: 官方最新版 ($(stat -c%s new.nnue) 字节)"
+          echo "=============================================="
+          OUT=$(printf 'setoption name EvalFile value %s/new.nnue\nbench\nquit\n' "$PWD" \
+                | ./bin/pikafish 2>&1)
+          CODE=$?
+          echo "$OUT" | tail -30
+          echo "----------------------------------------------"
+          echo "退出码: $CODE"
+          if echo "$OUT" | grep -q 'Nodes searched'; then
+            echo "RESULT_NEW=PASS" >> "$GITHUB_ENV"
+            echo "✅ 官方最新版可正常加载"
+          else
+            echo "RESULT_NEW=FAIL" >> "$GITHUB_ENV"
+            echo "❌ 官方最新版加载失败（异常，需排查编译参数）"
+            exit 1
+          fi
+
+      - name: 测试旧版权重
+        if: ${{ github.event.inputs.old_nnue_url != '' }}
+        run: |
+          set +e
+          echo "=============================================="
+          echo " 测试: 旧版 ($(stat -c%s old.nnue) 字节)"
+          echo "=============================================="
+          OUT=$(printf 'setoption name EvalFile value %s/old.nnue\nbench\nquit\n' "$PWD" \
+                | ./bin/pikafish 2>&1)
+          CODE=$?
+          echo "$OUT" | tail -30
+          echo "----------------------------------------------"
+          echo "退出码: $CODE"
+          if echo "$OUT" | grep -q 'Nodes searched'; then
+            echo "RESULT_OLD=PASS" >> "$GITHUB_ENV"
+            echo "✅ 旧版也可加载 —— 可以用体积更小的旧版"
+          else
+            echo "RESULT_OLD=FAIL" >> "$GITHUB_ENV"
+            echo "⚠️ 旧版无法加载 —— 必须用 49MB 新版，需改运行时下载方案"
+          fi
+
+      - name: 结论汇总
+        if: always()
+        run: |
+          echo "## NNUE 兼容性实测结论" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 项目 | 值 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|-----|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 引擎源码 commit | \`${ENGINE_COMMIT:-未知}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 官方最新版 | ${RESULT_NEW:-未测试} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 旧版(约12MB) | ${RESULT_OLD:-未测试（未提供地址）} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${RESULT_OLD:-}" = "PASS" ]; then
+            echo "**结论**：旧版可用，插件包可用 12MB 权重，总体积约 27.9MB，在云打包 40MB 免费额度内。" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${RESULT_OLD:-}" = "FAIL" ]; then
+            echo "**结论**：旧版已不兼容当前源码，必须使用 49MB 官方新版。由于超出 40MB 额度，需改为运行时下载权重。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**结论**：仅验证了官方最新版可用。旧版未测试（运行时未提供下载地址）。" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -43,11 +43,9 @@ jobs:
           git clone --depth 1 https://github.com/official-pikafish/Pikafish.git engine-src
           echo "源码文件数: $(find engine-src/src -name '*.cpp' | wc -l)"
 
-      - name: 下载 NNUE 权重
-        run: |
-          curl -fsSL --retry 3 -o pikafish.nnue \
-            https://github.com/official-pikafish/Networks/releases/latest/download/pikafish.nnue
-          ls -lh pikafish.nnue
+      # 注意：不再下载与打包 NNUE 权重。
+      # 官方权重 2026-07 已涨到约 49MB，远超云打包 40MB 免费额度，
+      # 改为 App 首次启动时下载（见 app/utils/nnue.js）。
 
       # ---------------------------------------------------------------
       #  编译静态库：真机 arm64 + 模拟器 arm64/x86_64
@@ -86,9 +84,9 @@ jobs:
         run: |
           mkdir -p artifact
           cp -R build/ios/XiangqiEngine.framework artifact/ 2>/dev/null || true
-          cp build/ios/*.a artifact/
-          cp pikafish.nnue artifact/
           cp native/ios/IOS_集成说明.md artifact/ 2>/dev/null || true
+          # 不打包 *.a：那是编译 framework 的中间产物，插件只需 framework 本身，
+          # 带上去白占约 3MB。也不带 pikafish.nnue（改为运行时下载）。
           cd artifact && zip -qry ../XiangqiEngine-iOS.zip . && cd ..
           ls -lh XiangqiEngine-iOS.zip
 

@@ -20,9 +20,9 @@
 
 | 包名 | 内容 | 用在什么时候 |
 |------|------|-------------|
-| `XiangqiEngine-android-release.zip` | 仅 arm64-v8a | **正式发布**用这个，约 14MB |
-| `XiangqiEngine-android-full.zip` | arm64-v8a + x86_64 | 需要跑**模拟器**调试时用，约 28MB |
-| `XiangqiEngine-iOS.zip` | framework + nnue + 中间产物 .a | 打 iOS 包时用 |
+| `XiangqiEngine-android-release.zip` | 仅 arm64-v8a | **正式发布**用这个，约 4.2MB |
+| `XiangqiEngine-android-full.zip` | arm64-v8a + x86_64 | 需要跑**模拟器**调试时用，约 6.6MB |
+| `XiangqiEngine-iOS.zip` | framework + 集成说明 | 打 iOS 包时用 |
 
 ---
 
@@ -74,7 +74,11 @@ powershell -ExecutionPolicy Bypass -File scripts\install-artifact.ps1 -Verify
 5. 点「打包」
 
 > **体积提醒**：云打包免费额度 **40MB**。
-> 正式包约 14MB、完整包约 28MB，都在额度内。
+> 正式包约 4.2MB、完整包约 6.6MB，离额度还很远。
+>
+> **为什么这么小**：约 49MB 的 NNUE 权重不再打进包里，改为 App 首次启动时下载
+> （见 `app/utils/nnue.js`）。官方权重 2026-07 从 12MB 涨到 49MB，若内置，
+> 插件包会达 102MB 直接超额，而且官方每更新一次权重就得重新发版。
 > 但如果哪天超了，先删 `android/src/main/jniLibs/x86_64/`（模拟器才用得到）。
 
 ---
@@ -102,8 +106,7 @@ XiangqiEngine/
 ├── package.json          ← Android 包提供
 ├── android/              ← Android 包提供
 └── ios/                  ← iOS 包提供
-    ├── XiangqiEngine.framework
-    └── pikafish.nnue
+    └── XiangqiEngine.framework
 ```
 
 先装 Android 再装 iOS（或反过来），**两个都要装**才能同时打双端。
@@ -124,9 +127,11 @@ ios/XiangqiEngine.framework/
 
 如果那个 `XiangqiEngine` 只有几十字节，说明链接被压坏了，重新下载。脚本会自动检查并报 `[FAIL]`。
 
-### ④ iOS 包里的 `.a` 文件不用装
+### ④ iOS 包里无需关心 `.a` 与权重
 
-`XiangqiEngine-iOS.zip` 里有 `libpikafish-ios.a` 之类的静态库，那是**编译 framework 的中间产物**，插件只需要 framework 本身。装进去纯粹白占体积（约 3MB），脚本会自动跳过。
+CI 已不再把编译中间产物 `.a`（约 3MB）和 NNUE 权重（约 49MB）放进产物包：
+插件只需 framework 本身，权重则由 App 首次启动时下载。
+若您手上是旧产物包（里面还带着这些），安装脚本会自动跳过，不会白占体积。
 
 ---
 
@@ -140,12 +145,13 @@ app/nativeplugins/XiangqiEngine/
 ├── android/src/main/
 │   ├── jniLibs/arm64-v8a/libpikafish.so        必需
 │   ├── jniLibs/x86_64/libpikafish.so           模拟器才要，正式包可删
-│   ├── assets/pikafish.nnue                    必需，11.8MB
 │   └── java/com/xiangqi/engine/*.java          必需，2 个文件
 └── ios/
-    ├── XiangqiEngine.framework/                打 iOS 包才需要
-    └── pikafish.nnue                           必需（package.json 的 resources 声明了它）
+    └── XiangqiEngine.framework/                打 iOS 包才需要
 ```
+
+> 注意：**不需要**放 `pikafish.nnue`。权重由 App 首次启动时下载到
+> 本地可写目录，放进插件只会白白消耗 49MB 额度。
 
 摆完务必跑一次校验，别等云打包失败了才排查：
 
@@ -158,7 +164,10 @@ powershell -ExecutionPolicy Bypass -File scripts\install-artifact.ps1 -Verify
 ## 六、常见问题
 
 **Q：插件目录已被 gitignore，会不会丢？**
-A：会。它是 28MB 的构建产物，不入库。换机或重新 clone 后需要重新下载产物安装，这也正是这个脚本存在的意义。详见 [本地开发环境](%E6%9C%AC%E5%9C%B0%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83.md)。
+A：会。它是构建产物，不入库。换机或重新 clone 后需要重新下载产物安装，这也正是这个脚本存在的意义。现在只有 6.6MB，下载很快。详见 [本地开发环境](%E6%9C%AC%E5%9C%B0%E5%BC%80%E5%8F%91%E7%8E%AF%E5%A2%83.md)。
+
+**Q：权重不打进包，那用户首次用会怎样？**
+A：进入对局页时会弹窗提示“需下载约 49MB 引擎数据，建议 Wi-Fi”，同意后显示进度，下好即缓存，后续启动直接复用。下载源有 3 个（GitHub + 2 个国内镜像）自动回退。
 
 **Q：不想等 CI，能本地编 Android 的 .so 吗？**
 A：可以，但要装 NDK：`powershell -File native\android\build_so.ps1 -Abi arm64-v8a`。

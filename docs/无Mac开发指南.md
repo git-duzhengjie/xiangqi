@@ -37,7 +37,7 @@
 
 - `XiangqiEngine-plugin-android` → 内含两个 zip
   - `XiangqiEngine-android-full.zip`（含 x86_64 模拟器库，约 26MB）
-  - `XiangqiEngine-android-release.zip`（**仅 arm64，约 14MB，正式发布用**）
+  - `XiangqiEngine-android-release.zip`（**仅 arm64，约 4.2MB，正式发布用**）
 
 CI 已自动做了两项校验，失败会直接红灯：
 - ELF 架构是否正确（AArch64 / x86-64）
@@ -73,12 +73,12 @@ app/nativeplugins/XiangqiEngine/
 
 | 配置 | 体积 |
 |------|------|
-| 完整包（双 ABI + 双份权重） | 约 28MB |
-| **正式包（仅 arm64 + 单份权重）** | **约 14MB** ✅ |
+| 完整包（双 ABI） | 约 6.6MB |
+| **正式包（仅 arm64）** | **约 4.2MB** ✅ |
 
 发布前请确认：
 - 删除 `jniLibs/x86_64/`（模拟器调试用，正式包不需要）
-- 权重 `pikafish.nnue` 只保留 Android `assets/` 一份
+- NNUE 权重不入包，App 首次启动时下载（官方权重已涨至约 49MB）
 
 ---
 
@@ -91,7 +91,7 @@ Actions → **Build iOS Engine** → **Run workflow**。
 CI 在 macOS runner 上完成原本需要 Xcode 手工做的全部事：
 - 编译真机 arm64 与模拟器静态库
 - 组装 `XiangqiEngine.framework`（含 Info.plist、modulemap、Headers）
-- 嵌入 `pikafish.nnue` 作为 bundle 资源
+- 不嵌入 `pikafish.nnue`（权重改为运行时下载）
 - 校验架构与符号
 
 下载产物 `XiangqiEngine-iOS.zip`。
@@ -198,9 +198,9 @@ JNI 符号名与 Java 类的**包名/类名/方法名**必须严格对应。
 ### Q：引擎不走棋 / 一直「思考中」
 
 排查顺序：
-1. `pikafish.nnue` 是否在 `assets/` 中（Android）/ Bundle Resources 中（iOS）
-2. 首次启动需释放 11.8MB 权重到私有目录，稍慢属正常
-3. 查看日志中 `initEngine` 的返回，`nnueSize` 应约为 12376000 字节
+1. 首次进入对局页是否弹出“下载引擎数据”弹窗并完成下载（约 49MB）
+2. 下载失败时会自动尝试 2 个国内镜像，均失败才报错
+3. 查看日志中 `initEngine` 的返回：若 `needDownload` 为 true 则权重不可用
 
 ### Q：为什么不支持 32 位 ARM（armeabi-v7a）？
 

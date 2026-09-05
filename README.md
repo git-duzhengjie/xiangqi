@@ -124,13 +124,16 @@ CI 已内置两道校验：ELF 架构正确性、JNI 符号完整导出（后者
 
 ### 第 1 步：拉取引擎源码与权重
 
-引擎源码与 NNUE 权重（约 12MB）不入库，需先获取：
+引擎源码与 NNUE 权重（官方最新约 49MB）不入库，本地调试需先获取：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\fetch-engine.ps1
 ```
 
 产出 `engine-src/` 与 `pikafish.nnue`。
+
+> 注意：权重**不会**被打进插件包。App 运行时会自行下载到本地
+> （见 `app/utils/nnue.js`），这里拉取只是为了本地编译与跑引擎测试。
 
 ### 第 2 步：编译 Android 引擎库
 
@@ -152,7 +155,7 @@ app/nativeplugins/XiangqiEngine/
 └── android/src/main/
     ├── jniLibs/arm64-v8a/libpikafish.so
     ├── jniLibs/x86_64/libpikafish.so
-    ├── assets/pikafish.nnue
+    ├── java/com/xiangqi/engine/
     └── java/com/xiangqi/engine/*.java
 ```
 
@@ -182,7 +185,7 @@ chmod +x native/ios/build_ios.sh
 
 1. 新建 Cocoa Touch Framework 项目 `XiangqiEngine`
 2. 加入 `native/ios/` 下的 `.h/.m/.mm` 与上一步的 `.a`
-3. 把 `pikafish.nnue` 加入 **Bundle Resources**
+3. 无需把 `pikafish.nnue` 加入 Bundle Resources（权重运行时下载）
 4. Build Settings → Other Linker Flags 添加 `-lc++`
 5. 导出 `XiangqiEngine.framework` 至 `app/nativeplugins/XiangqiEngine/ios/`
 

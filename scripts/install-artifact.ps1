@@ -70,10 +70,13 @@ function Test-Plugin {
         Say-Bad 'package.json missing'
     }
 
-    # 2) Android required files
+    # 2) Android required files.
+    #    pikafish.nnue is deliberately NOT required here. The official weights
+    #    grew to ~49MB in 2026-07; bundling them would push the plugin to
+    #    ~102MB, far past the 40MB free cloud-build quota. The app now
+    #    downloads the weights on first launch (see app/utils/nnue.js).
     $android = @(
         'android\src\main\jniLibs\arm64-v8a\libpikafish.so',
-        'android\src\main\assets\pikafish.nnue',
         'android\src\main\java\com\xiangqi\engine\PikafishBridge.java',
         'android\src\main\java\com\xiangqi\engine\XiangqiEngineModule.java'
     )
@@ -178,8 +181,9 @@ function Install-Android ($tmp) {
 # -------------------------------------------------------------
 #  Install an iOS artifact zip
 #  CI zips the artifact *contents* (no top-level folder):
-#    XiangqiEngine.framework/ , *.a , pikafish.nnue , IOS_*.md
-#  Only the framework and the nnue go into the plugin's ios/ folder.
+#    XiangqiEngine.framework/ , IOS_*.md
+#  Only the framework goes into the plugin's ios/ folder. NNUE weights are
+#  downloaded by the app at first launch, not bundled (see app/utils/nnue.js).
 #  The .a files are intermediate outputs and are NOT needed.
 # -------------------------------------------------------------
 function Install-Ios ($tmp) {
@@ -194,13 +198,12 @@ function Install-Ios ($tmp) {
     Copy-Item $fw.FullName $dst -Recurse -Force
     Say-Ok 'XiangqiEngine.framework installed'
 
-    # nnue must exist in ios/ as well: package.json lists it under resources
+    # nnue is no longer shipped inside the plugin: the official weights grew to
+    # ~49MB in 2026-07 and package.json's resources list is now empty. If an old
+    # artifact still carries one, skip it instead of bloating the plugin.
     $nnue = Get-ChildItem $tmp -Recurse -File -Filter 'pikafish.nnue' | Select-Object -First 1
     if ($nnue) {
-        Copy-Item $nnue.FullName (Join-Path $iosDir 'pikafish.nnue') -Force
-        Say-Ok 'pikafish.nnue installed into ios/'
-    } else {
-        Say-Warn 'pikafish.nnue not in zip; keeping the existing one'
+        Say-Info 'skipped pikafish.nnue - weights are downloaded at runtime now'
     }
 
     $a = Get-ChildItem $tmp -Recurse -File -Filter '*.a'

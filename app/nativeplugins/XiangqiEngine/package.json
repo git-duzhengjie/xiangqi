@@ -35,9 +35,7 @@
       "embedFrameworks": [
         "XiangqiEngine.framework"
       ],
-      "resources": [
-        "pikafish.nnue"
-      ]
+      "resources": []
     }
   }
 }

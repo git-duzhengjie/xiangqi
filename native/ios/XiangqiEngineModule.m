@@ -3,7 +3,9 @@
 //  uniapp 原生插件模块（iOS）
 //
 //  暴露给 JS 的方法与 Android 侧保持完全一致：
-//    initEngine / onOutput / send / setOptions / go / stop / newGame / dispose
+//    initEngine(options,cb) / onOutput / send / setOptions / go / stop / newGame / dispose
+//    initEngine 的 options.nnuePath 可指定外部权重文件（运行时下载得到），
+//    不传则回退到 Bundle 内置权重。
 //
 //  本文件为 Pikafish(GPLv3) 的配套代码，以 GPLv3 提供。
 //
@@ -21,7 +23,7 @@
 @implementation XiangqiEngineModule
 
 // 导出方法给 JS
-UNI_EXPORT_METHOD(@selector(initEngine:))
+UNI_EXPORT_METHOD(@selector(initEngine:callback:))
 UNI_EXPORT_METHOD(@selector(onOutput:))
 UNI_EXPORT_METHOD(@selector(send:))
 UNI_EXPORT_METHOD(@selector(setOptions:callback:))
@@ -32,21 +34,46 @@ UNI_EXPORT_METHOD(@selector(dispose))
 
 #pragma mark - 初始化
 
-- (void)initEngine:(UniModuleKeepAliveCallback)callback {
+- (void)initEngine:(NSDictionary *)options callback:(UniModuleKeepAliveCallback)callback {
     if (self.inited) {
         if (callback) callback(@{@"success": @YES, @"message": @"already initialized"}, NO);
         return;
     }
 
-    // pikafish.nnue 作为 bundle 资源打包，读取其路径
-    NSString *nnuePath = [[NSBundle mainBundle] pathForResource:@"pikafish" ofType:@"nnue"];
+    // ---- 1) 优先用 JS 层传入的外部权重路径 ----
+    //
+    // 官方权重 2026-07 已涨到约 49MB，打进插件会超出 HBuilderX 云打包
+    // 40MB 免费额度，所以改为首次启动下载到沙箱，再把路径传进来。
+    NSString *nnuePath = nil;
+    NSString *ext = options[@"nnuePath"];
+    if ([ext isKindOfClass:[NSString class]] && ext.length > 0) {
+        // uni-app 侧可能传 file:// 开头的 URL，统一转成文件系统路径
+        if ([ext hasPrefix:@"file://"]) {
+            ext = [[NSURL URLWithString:ext] path] ?: [ext substringFromIndex:7];
+        }
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSDictionary *attr = [fm attributesOfItemAtPath:ext error:nil];
+        // 用 1MB 做下限拦住“下载中断产生的碎片文件”，
+        // 避免把残文件交给引擎导致 exit(EXIT_FAILURE) 直接闪退。
+        if (attr && [attr fileSize] > 1024 * 1024) {
+            nnuePath = ext;
+        }
+    }
+
+    // ---- 2) 回退到 Bundle 内置权重 ----
+    if (nnuePath == nil) {
+        nnuePath = [[NSBundle mainBundle] pathForResource:@"pikafish" ofType:@"nnue"];
+    }
     if (nnuePath == nil) {
         // 兼容放在 framework bundle 内的情况
         NSBundle *fb = [NSBundle bundleForClass:[self class]];
         nnuePath = [fb pathForResource:@"pikafish" ofType:@"nnue"];
     }
     if (nnuePath == nil) {
-        if (callback) callback(@{@"success": @NO, @"error": @"pikafish.nnue 未找到（请确认已加入 Bundle Resources）"}, NO);
+        // 注意：needDownload 告知 JS 层“不是报错，而是该去下载权重了”
+        if (callback) callback(@{@"success": @NO,
+                                 @"needDownload": @YES,
+                                 @"error": @"pikafish.nnue 不可用：未传入有效 nnuePath，且 Bundle 内也无内置权重"}, NO);
         return;
     }
 

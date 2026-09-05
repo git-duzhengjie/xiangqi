@@ -20,7 +20,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * XiangqiEngineModule -- uniapp 原生插件（Android）
  *
  * 暴露给 JS 的方法：
- *   initEngine(callback)              初始化引擎（自动释放 nnue 权重）
+ *   initEngine(options, callback)     初始化引擎
+ *                                     options.nnuePath 可指定外部权重文件；
+ *                                     不传则回退到 assets 内置权重。
  *   send(cmd)                         发送任意 UCI 命令
  *   setDifficulty(level)              设置难度
  *   go(fen, moves, opts, callback)    计算最佳着法
@@ -49,7 +51,7 @@ public class XiangqiEngineModule extends UniModule {
     //  初始化
     // ------------------------------------------------------------
     @UniJSMethod(uiThread = false)
-    public void initEngine(UniJSCallback callback) {
+    public void initEngine(JSONObject options, UniJSCallback callback) {
         JSONObject res = new JSONObject();
 
         if (!PikafishBridge.isLoaded()) {
@@ -75,8 +77,19 @@ public class XiangqiEngineModule extends UniModule {
         }
 
         try {
-            // 1) 把 assets 里的 nnue 权重释放到 filesDir（引擎需要真实文件路径）
-            File nnue = extractNnue(ctx);
+            // 1) 解析权重文件路径
+            //    优先用 JS 层传入的外部路径（运行时下载到本地的权重），
+            //    没传或文件无效时回退到 assets 内置权重。
+            //    这样做是因为官方权重在 2026-07 已涨到约 49MB，内置会超出
+            //    HBuilderX 云打包 40MB 免费额度，故改为首次启动下载。
+            File nnue = resolveNnue(ctx, options);
+            if (nnue == null) {
+                res.put("success", false);
+                res.put("error", "nnue not available: 未传入有效 nnuePath，且 assets 内也没有内置权重");
+                res.put("needDownload", true);
+                invoke(callback, res);
+                return;
+            }
 
             // 2) 初始化 native 引擎
             boolean ok = PikafishBridge.nativeInit(nnue.getAbsolutePath());
@@ -110,8 +123,46 @@ public class XiangqiEngineModule extends UniModule {
     }
 
     /**
+     * 解析最终使用的权重文件。
+     *
+     * 优先级：
+     *   1. options.nnuePath 指向的外部文件（JS 层运行时下载得到）
+     *   2. assets 内置的 pikafish.nnue（开发阶段或小权重时才会打进去）
+     *   3. 都没有则返回 null，由调用方告知 JS 层需要下载
+     *
+     * @return 可用的权重文件；无可用权重时返回 null
+     */
+    private File resolveNnue(Context ctx, JSONObject options) {
+        // ---- 1) 外部路径 ----
+        if (options != null) {
+            String p = options.optString("nnuePath", null);
+            if (p != null && p.length() > 0) {
+                // uni-app 侧可能传 file:// 前缀或 _doc/ 等逻辑路径，
+                // 这里只接受已转成系统绝对路径的形式。
+                if (p.startsWith("file://")) {
+                    p = p.substring(7);
+                }
+                File ext = new File(p);
+                // 权重至少数 MB，用 1MB 做下限可拦住“下载中断产生的碎片文件”，
+                // 避免把残文件交给引擎导致 exit(EXIT_FAILURE) 直接闪退。
+                if (ext.exists() && ext.isFile() && ext.length() > 1024L * 1024L) {
+                    return ext;
+                }
+            }
+        }
+
+        // ---- 2) assets 内置 ----
+        try {
+            return extractNnue(ctx);
+        } catch (IOException e) {
+            // assets 里没打包权重时会走到这里，属于预期情况，不当作错误
+            return null;
+        }
+    }
+
+    /**
      * 从 assets 释放 pikafish.nnue 到 filesDir。
-     * 已存在且大小一致则跳过，避免每次启动都拷贝 11MB。
+     * 已存在且大小一致则跳过，避免每次启动都拷贝数十 MB。
      */
     private File extractNnue(Context ctx) throws IOException {
         File out = new File(ctx.getFilesDir(), NNUE_NAME);

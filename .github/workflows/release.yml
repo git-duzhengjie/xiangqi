@@ -8,12 +8,13 @@ name: Release
 #       不复制编译逻辑 —— 否则三处参数各改一份必然走偏。
 #    2. 双端并行构建，最后由 release 作业聚合产物统一发布，
 #       避免多个作业各自发布同一 tag 导致产物互相覆盖。
-#    3. iOS 允许失败（continue-on-error），因为 iOS 构建链路更脆弱；
+#    3. iOS 失败不阻塞发版：由 release 作业的
+#       if: always() && needs.android.result == 'success' 实现
+#       （reusable 作业不能用 continue-on-error）。
 #       Android 成功即可发布，Release 说明中会标注 iOS 状态。
 #
 #  触发方式：
-#    - 打 tag：git tag v1.0.0 && git push origin v1.0.0
-#    - 手动触发：Actions 页面输入版本号
+#    - 手动触发：Actions 页面运行并输入版本号（已移除 push tag 自动发布）
 # =====================================================================
 
 # 仅手动触发：不再因 push tag 自动发布，避免误推 tag 就放出 Release。
@@ -65,9 +66,11 @@ jobs:
     name: 构建 iOS
     needs: verify
     uses: ./.github/workflows/build-ios.yml
-    # iOS 链路依赖 Xcode 环境，较易受 runner 镜像变动影响。
-    # 允许失败，不阻塞 Android 发版。
-    continue-on-error: true
+    # 注意：调用可复用工作流（uses:）的作业不支持 continue-on-error，
+    # 写了会直接报 "Unexpected value 'continue-on-error'" 导致整个
+    # workflow 无法解析。iOS 链路依赖 Xcode 环境、较易受 runner 镜像
+    # 变动影响，其「失败不阻塞 Android 发版」的需求已由下游 release
+    # 作业的 if: always() && needs.android.result == 'success' 实现。
 
   # -----------------------------------------------------------------
   #  3) 聚合产物并发布

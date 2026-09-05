@@ -53,13 +53,28 @@ OBJDIR="$OUT/fw-obj"
 rm -rf "$OBJDIR"; mkdir -p "$OBJDIR"
 
 echo "--> compiling PikafishBridge.mm"
+# Flags must match build_ios.sh: the bridge includes engine headers,
+# so -DIS_64BIT is required here too (90-square board needs u128).
+# -fno-rtti was dropped to stay consistent with the verified flag set.
 xcrun --sdk iphoneos clang++ \
     -target arm64-apple-ios${MIN_IOS} \
     -isysroot "$SYSROOT" \
-    -std=c++17 -O2 -fobjc-arc -fno-rtti \
-    -I"$IOSDIR" \
+    -std=c++17 -O2 -DNDEBUG -fobjc-arc \
+    -DIS_64BIT -DUSE_NEON=8 -DUSE_POPCNT -DNNUE_EMBEDDING_OFF \
+    -I"$IOSDIR" -I"$ROOT/engine-src/src" \
     -c "$IOSDIR/PikafishBridge.mm" \
-    -o "$OBJDIR/PikafishBridge.o"
+    -o "$OBJDIR/PikafishBridge.o" 2> "$OBJDIR/bridge.log" || {
+        echo "COMPILE FAILED: PikafishBridge.mm"
+        echo "---------------- compiler output ----------------"
+        cat "$OBJDIR/bridge.log"
+        echo "------------------------------------------------"
+        exit 1
+    }
+
+if [ ! -f "$OBJDIR/PikafishBridge.o" ]; then
+    echo "ERROR: PikafishBridge.o was not produced"
+    exit 1
+fi
 
 # ---------- merge engine lib + bridge object ----------
 echo "--> merging static libraries"
@@ -117,12 +132,38 @@ MODMAP
 echo ""
 echo "=== verify ==="
 lipo -info "$FW/XiangqiEngine"
-if nm "$FW/XiangqiEngine" 2>/dev/null | grep -q 'PikafishBridge'; then
-    echo "symbol PikafishBridge: OK"
-else
-    echo "symbol PikafishBridge: MISSING"
+
+# Size assertion: a correct binary is ~2MB+. The earlier broken build
+# produced a 119K archive, so guard against truncated output.
+FW_SIZE=$(stat -f%z "$FW/XiangqiEngine")
+echo "binary size: $((FW_SIZE/1024))K"
+if [ "$FW_SIZE" -lt 1000000 ]; then
+    echo "ERROR: framework binary is only $((FW_SIZE/1024))K, expected >= 1000K."
+    echo "Most object files are likely missing. Aborting."
     exit 1
 fi
+
+for sym in PikafishBridge pikafish_main; do
+    if nm "$FW/XiangqiEngine" 2>/dev/null | grep -q "$sym"; then
+        echo "symbol $sym: OK"
+    else
+        echo "ERROR: symbol $sym missing"
+        exit 1
+    fi
+done
+
+# NNUE weights must be present as a bundle resource
+if [ ! -f "$FW/pikafish.nnue" ]; then
+    echo "ERROR: pikafish.nnue missing from framework"
+    exit 1
+fi
+NNUE_SIZE=$(stat -f%z "$FW/pikafish.nnue")
+echo "nnue size: $((NNUE_SIZE/1024/1024))MB"
+if [ "$NNUE_SIZE" -lt 5000000 ]; then
+    echo "ERROR: pikafish.nnue looks truncated ($((NNUE_SIZE/1024))K)"
+    exit 1
+fi
+
 echo ""
 find "$FW" -type f | sed "s|$OUT/||"
 echo ""

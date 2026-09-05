@@ -33,12 +33,54 @@ jobs:
         uses: actions/checkout@v4
 
       # Pikafish 官方要求 NDK r27+（低版本缺少必要的 C++17 支持）
+      #
+      # 不要开启 local-cache：它会在 ~/.setup-ndk 下建一个指向
+      # /opt/hostedtoolcache 的软链接，缓存未命中时链接失效，
+      # 于是路径看着存在、实际打不开，编译时报
+      # "clang++: No such file or directory"（见 nttld/setup-ndk#547）。
       - name: 安装 Android NDK
         id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
-          local-cache: true
+
+      # -------------------------------------------------------------
+      #  定位工具链并做前置校验。
+      #  不硬编码 action 的输出路径：该 action 历史上多次改变目录层级
+      #  （见 setup-ndk#576），直接探测 clang++ 真实位置最稳妥，
+      #  且失败会立刻停在这一步，而不是刷几十行编译错误。
+      # -------------------------------------------------------------
+      - name: 定位 NDK 工具链
+        id: toolchain
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          set -e
+          echo "action 输出的 ndk-path: $NDK_PATH"
+
+          CLANG=""
+          for base in "$NDK_PATH" "$ANDROID_NDK_HOME" "$ANDROID_NDK_ROOT"; do
+            [ -n "$base" ] || continue
+            # 真实 NDK 目录可能还嵌一层 android-ndk-rXX
+            for cand in "$base" "$base"/android-ndk-*; do
+              c="$cand/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++"
+              if [ -x "$c" ]; then CLANG="$c"; break 2; fi
+            done
+          done
+
+          if [ -z "$CLANG" ]; then
+            echo "::error::未能定位可执行的 clang++"
+            echo "--- 诊断信息 ---"
+            ls -la "$NDK_PATH" 2>&1 || echo "ndk-path 不可读"
+            find /opt/hostedtoolcache/ndk ~/.setup-ndk -maxdepth 3 -name 'clang++' 2>/dev/null | head -20
+            exit 1
+          fi
+
+          BIN="$(dirname "$CLANG")"
+          echo "clang     = $CLANG"
+          echo "版本      = $("$CLANG" --version | head -1)"
+          echo "clang=$CLANG"                >> "$GITHUB_OUTPUT"
+          echo "readelf=$BIN/llvm-readelf"    >> "$GITHUB_OUTPUT"
 
       - name: 拉取 Pikafish 源码
         run: |
@@ -51,12 +93,10 @@ jobs:
       # ---------------------------------------------------------------
       - name: 编译 libpikafish.so
         env:
-          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CLANG: ${{ steps.toolchain.outputs.clang }}
           ABI: ${{ matrix.abi }}
         run: |
           set -e
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          CLANG="$TOOLCHAIN/bin/clang++"
 
           # 目标三元组与架构专属参数
           if [ "$ABI" = "arm64-v8a" ]; then
@@ -99,11 +139,10 @@ jobs:
       # ---------------------------------------------------------------
       - name: 校验产物
         env:
-          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          READELF: ${{ steps.toolchain.outputs.readelf }}
           ABI: ${{ matrix.abi }}
         run: |
           set -e
-          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           SO="build/$ABI/libpikafish.so"
 
           echo "=== ELF 头 ==="

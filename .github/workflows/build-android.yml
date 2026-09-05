@@ -12,17 +12,11 @@ name: Build Android Engine
 #  发布由 release.yml 统一聚合，本工作流只负责产出 artifact。
 # =====================================================================
 
+# 仅手动触发。
+# workflow_call 保留：release.yml 靠它复用本工作流的编译作业，删了会断链。
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'native/android/**'
-      - '.github/workflows/build-android.yml'
-  pull_request:
-    paths:
-      - 'native/android/**'
 
 jobs:
   build-android:

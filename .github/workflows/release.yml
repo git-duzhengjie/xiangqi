@@ -16,14 +16,13 @@ name: Release
 #    - 手动触发：Actions 页面输入版本号
 # =====================================================================
 
+# 仅手动触发：不再因 push tag 自动发布，避免误推 tag 就放出 Release。
+# 发布时在 Actions 页面手动运行，并填写版本号。
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（如 v1.0.0），手动触发时用于命名'
+        description: '版本号（如 v1.0.0），用于命名 Release 与 tag'
         required: true
         default: 'v0.0.0-manual'
       prerelease:
@@ -85,10 +84,12 @@ jobs:
       - name: 确定版本号
         id: ver
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            V="${{ github.event.inputs.version }}"
-          else
-            V="${GITHUB_REF#refs/tags/}"
+          # 已改为仅手动触发，版本号只从输入参数来（原来还有一条从
+          # refs/tags/ 取值的分支，push tag 触发删除后已成死代码）。
+          V="${{ github.event.inputs.version }}"
+          if [ -z "$V" ]; then
+            echo "错误：未提供版本号" >&2
+            exit 1
           fi
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "发布版本: $V"
@@ -179,6 +180,8 @@ jobs:
           cat NOTES.md
 
       - name: 创建 Release
+        # tag 不存在时，action-gh-release 会基于当前 commit 自动创建，
+        # 所以手动触发时无需提前打 tag。
         uses: softprops/action-gh-release@v2
         with:
           name: 中国象棋 ${{ steps.ver.outputs.version }}

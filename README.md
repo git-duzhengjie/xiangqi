@@ -93,11 +93,10 @@ xiangqi/
 
 仓库 → **Actions** → 选对应工作流 → **Run workflow**，完成后下载产物即可。
 
-发布正式版本只需打 tag，双端产物会自动聚合到同一个 Release：
+> 所有工作流均**仅手动触发**，不会因 push 或打 tag 自动跑，避免误发布与浪费额度。
 
-```bash
-git tag v1.0.0 && git push origin v1.0.0
-```
+发布正式版本：Actions → **Release** → **Run workflow** → 填入版本号（如 `v1.0.0`），
+双端产物会聚合到同一个 Release，tag 不存在时自动创建。
 
 详见 [发布流程](docs/%E5%8F%91%E5%B8%83%E6%B5%81%E7%A8%8B.md)。
 

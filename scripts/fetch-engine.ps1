@@ -40,7 +40,7 @@ if (Test-Path $NNUE_PATH) {
     $sz = [math]::Round((Get-Item $NNUE_PATH).Length / 1MB, 2)
     Write-Host "[2/2] weights already present (${sz}MB), skip" -ForegroundColor Yellow
 } else {
-    Write-Host '[2/2] downloading NNUE weights (~12MB) ...' -ForegroundColor Green
+    Write-Host '[2/2] downloading NNUE weights (~49MB) ...' -ForegroundColor Green
     $url = 'https://github.com/official-pikafish/Networks/releases/latest/download/pikafish.nnue'
     try {
         Invoke-WebRequest -Uri $url -OutFile $NNUE_PATH -TimeoutSec 600

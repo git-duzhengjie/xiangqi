@@ -12,7 +12,7 @@
 | 入口 | 得到的文件 | 特点 |
 |------|-----------|------|
 | Actions 页面 → 某次运行 → Artifacts | `XiangqiEngine-plugin-android.zip` | **外层多套了一层 zip**（GitHub 网页下载的固有行为），里面才是真正的包 |
-| Releases 页面（打 tag 触发） | `XiangqiEngine-android-release.zip` 等 | 直接就是目标包，没有外层包裹 |
+| Releases 页面（手动运行 Release 工作流后） | `XiangqiEngine-android-release.zip` 等 | 直接就是目标包，没有外层包裹 |
 
 安装脚本对两种情况**都能处理**，会自动识别并拆掉外层包裹，不用您手工先解一层。
 

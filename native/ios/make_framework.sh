@@ -6,7 +6,10 @@
 #    - create framework bundle layout
 #    - compile ObjC/ObjC++ bridge sources
 #    - link with libpikafish.a
-#    - embed pikafish.nnue as a bundle resource
+#
+#  NOTE: pikafish.nnue is NOT embedded anymore. The official weights grew to
+#  ~49MB in 2026-07, which would blow past the 40MB free cloud-build quota,
+#  so the app downloads them at first launch (see app/utils/nnue.js).
 #
 #  Run AFTER build_ios.sh. Requires macOS + Xcode CLT.
 #
@@ -22,17 +25,12 @@ OUT="$ROOT/build/ios"
 FW="$OUT/XiangqiEngine.framework"
 
 DEVICE_LIB="$OUT/libpikafish-device.a"
-NNUE="$ROOT/pikafish.nnue"
 
 echo "=== assemble XiangqiEngine.framework ==="
 
 # ---------- preflight ----------
 if [ ! -f "$DEVICE_LIB" ]; then
     echo "ERROR: $DEVICE_LIB not found. Run build_ios.sh first."
-    exit 1
-fi
-if [ ! -f "$NNUE" ]; then
-    echo "ERROR: pikafish.nnue not found at repo root."
     exit 1
 fi
 
@@ -88,8 +86,7 @@ cp "$OUT/libXiangqiEngine.a" "$FW/XiangqiEngine"
 cp "$IOSDIR/PikafishBridge.h" "$FW/Headers/"
 cp "$IOSDIR/XiangqiEngineModule.h" "$FW/Headers/"
 
-# ---------- resource: NNUE weights ----------
-cp "$NNUE" "$FW/pikafish.nnue"
+# NOTE: no pikafish.nnue here on purpose -- weights are downloaded at runtime.
 
 # ---------- Info.plist ----------
 cat > "$FW/Info.plist" <<'PLIST'
@@ -161,17 +158,9 @@ for sym in PikafishBridge pikafish_main; do
     fi
 done
 
-# NNUE weights must be present as a bundle resource
-if [ ! -f "$FW/pikafish.nnue" ]; then
-    echo "ERROR: pikafish.nnue missing from framework"
-    exit 1
-fi
-NNUE_SIZE=$(stat -f%z "$FW/pikafish.nnue")
-echo "nnue size: $((NNUE_SIZE/1024/1024))MB"
-if [ "$NNUE_SIZE" -lt 5000000 ]; then
-    echo "ERROR: pikafish.nnue looks truncated ($((NNUE_SIZE/1024))K)"
-    exit 1
-fi
+# NOTE: pikafish.nnue is deliberately absent from the framework.
+# The app downloads the weights at first launch, so there is nothing
+# to verify here.
 
 echo ""
 find "$FW" -type f | sed "s|$OUT/||"

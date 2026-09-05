@@ -98,22 +98,41 @@ function New-Icon {
         } catch { continue }
     }
 
+    # ⚠️ 不要用 DrawString + LineAlignment::Center 来居中汉字！
+    #    那样居中的是「字体行高盒」（含 ascent/descent 的空白），
+    #    而汉字墨迹在行高盒内本身就偏上，结果视觉上必然偏移，
+    #    再手工加 offsetY 补偿只是碰运气，换字体/换尺寸就又歪了。
+    #
+    #    正确做法：先把字形转成 GraphicsPath，量出墨迹的真实包围盒
+    #    (GetBounds)，再按包围盒中心与圆心的差值做平移。
+    #    这样无论什么字体、什么尺寸都精确居中。
     $fontSize = $d * 0.52
     $font = New-Object System.Drawing.Font($fontName, $fontSize,
                 [System.Drawing.FontStyle]::Bold,
                 [System.Drawing.GraphicsUnit]::Pixel)
-    $fmt = New-Object System.Drawing.StringFormat
-    $fmt.Alignment     = [System.Drawing.StringAlignment]::Center
-    $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+
+    # 棋子圆心（注意是圆心，不是画布中心；两者因 margin 而一致，但显式写出更清晰）
+    $cx = [float]($margin + $d / 2.0)
+    $cy = [float]($margin + $d / 2.0)
+
+    $glyph = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $emSize = $font.SizeInPoints * $g.DpiY / 72.0   # 转成与 Pixel 单位一致的 em 尺寸
+    $glyph.AddString('帥', $font.FontFamily, [int][System.Drawing.FontStyle]::Bold,
+                     [float]$emSize,
+                     (New-Object System.Drawing.PointF(0, 0)),
+                     [System.Drawing.StringFormat]::GenericTypographic)
+
+    $gb = $glyph.GetBounds()   # 墨迹真实边界
+    $mv = New-Object System.Drawing.Drawing2D.Matrix
+    $mv.Translate([float]($cx - ($gb.X + $gb.Width  / 2.0)),
+                  [float]($cy - ($gb.Y + $gb.Height / 2.0)))
+    $glyph.Transform($mv)
+    $mv.Dispose()
 
     $redBrush = New-Object System.Drawing.SolidBrush($cRed)
-    # 视觉居中：汉字基线略偏下，向上微调
-    $offsetY  = [float](-1.0 * $Size * 0.012)
-    $textRect = New-Object System.Drawing.RectangleF(
-                    [float]0, $offsetY, [float]$Size, [float]$Size)
-    $g.DrawString('帥', $font, $redBrush, $textRect, $fmt)
+    $g.FillPath($redBrush, $glyph)
 
-    $redBrush.Dispose(); $fmt.Dispose(); $font.Dispose()
+    $redBrush.Dispose(); $glyph.Dispose(); $font.Dispose()
 
     $g.Dispose()
     $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)

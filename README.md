@@ -151,12 +151,14 @@ powershell -ExecutionPolicy Bypass -File native\android\build_so.ps1 -Abi x86_64
 
 ```
 app/nativeplugins/XiangqiEngine/
-└── android/src/main/
-    ├── jniLibs/arm64-v8a/libpikafish.so
-    ├── jniLibs/x86_64/libpikafish.so
-    ├── java/com/xiangqi/engine/
-    └── java/com/xiangqi/engine/*.java
+├── android/libs/arm64-v8a/libpikafish.so
+├── android/libs/x86_64/libpikafish.so
+└── android/src/main/java/com/xiangqi/engine/*.java
 ```
+
+> `.so` 必须放在 `android/libs/<abi>/`。这是 uni-app 插件包的规定，
+> 不要写成 Android Gradle 工程惯用的 `src/main/jniLibs/`，
+> 云打包不会去那里找 `.so`。
 
 ### 第 4 步：打包运行
 

@@ -79,7 +79,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-artifact.ps1 -Verify
 > **为什么这么小**：约 49MB 的 NNUE 权重不再打进包里，改为 App 首次启动时下载
 > （见 `app/utils/nnue.js`）。官方权重 2026-07 从 12MB 涨到 49MB，若内置，
 > 插件包会达 102MB 直接超额，而且官方每更新一次权重就得重新发版。
-> 但如果哪天超了，先删 `android/src/main/jniLibs/x86_64/`（模拟器才用得到）。
+> 但如果哪天超了，先删 `android/libs/x86_64/`（模拟器才用得到）。
 
 ---
 
@@ -142,13 +142,18 @@ CI 已不再把编译中间产物 `.a`（约 3MB）和 NNUE 权重（约 49MB）
 ```
 app/nativeplugins/XiangqiEngine/
 ├── package.json
-├── android/src/main/
-│   ├── jniLibs/arm64-v8a/libpikafish.so        必需
-│   ├── jniLibs/x86_64/libpikafish.so           模拟器才要，正式包可删
-│   └── java/com/xiangqi/engine/*.java          必需，2 个文件
+├── android/
+│   ├── libs/arm64-v8a/libpikafish.so           必需
+│   ├── libs/x86_64/libpikafish.so              模拟器才要，正式包可删
+│   └── src/main/java/com/xiangqi/engine/*.java 必需，2 个文件
 └── ios/
     └── XiangqiEngine.framework/                打 iOS 包才需要
 ```
+
+> ⚠（踩过的坑）`.so` 必须放 `android/libs/<abi>/`。
+> 官方插件包格式规定“如果包含 so 文件，则放到 libs 下对应 cpu 类型目录”。
+> `src/main/jniLibs/` 是 Android Gradle 工程的约定，不是插件包的约定，
+> 放错位置会导致引擎加载不了。
 
 > 注意：**不需要**放 `pikafish.nnue`。权重由 App 首次启动时下载到
 > 本地可写目录，放进插件只会白白消耗 49MB 额度。

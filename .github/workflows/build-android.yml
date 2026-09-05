@@ -188,6 +188,13 @@ jobs:
         with:
           path: downloaded
 
+      # Java 源码只在 HBuilderX 云打包阶段才编译，本地与 CI 都不检查，
+      # 曾因误用 fastjson 不存在的 optString(key, fallback) 导致插件类
+      # 编译失败、requireNativePlugin 返回 null，真机上只提示
+      # 「原生插件未加载」，排查成本极高。这里用桩类 + javac 提前拦住。
+      - name: 校验 Java 源码可编译
+        run: node scripts/check-android-plugin.cjs
+
       # 注意：不再把 NNUE 权重打进插件包。
       # 官方权重 2026-07 已涨到约 49MB，打进去后插件包约 102MB，
       # 远超 HBuilderX 云打包 40MB 免费额度；且官方会持续更新权重。
@@ -198,12 +205,18 @@ jobs:
           set -e
           # 目录名必须与 package.json 的 id 一致，否则 HBuilderX 识别不到插件
           P="XiangqiEngine"
-          mkdir -p $P/android/src/main/jniLibs/arm64-v8a
-          mkdir -p $P/android/src/main/jniLibs/x86_64
+
+          # 【so 放置位置】官方规定（nativesupport.dcloud.net.cn 插件包格式）：
+          #   "android\libs 目录，所有需要使用的 jar 文件放到此目录，
+          #    如果包含 so 文件，则放到 libs 下对应 cpu 类型目录"
+          # 之前用的 src/main/jniLibs/ 是 Android Gradle 工程的约定，
+          # 不是 uni-app 插件包的约定，云打包不会去那里找 .so。
+          mkdir -p $P/android/libs/arm64-v8a
+          mkdir -p $P/android/libs/x86_64
           mkdir -p $P/android/src/main/java/com/xiangqi/engine
 
-          cp downloaded/libpikafish-arm64-v8a/libpikafish.so $P/android/src/main/jniLibs/arm64-v8a/
-          cp downloaded/libpikafish-x86_64/libpikafish.so    $P/android/src/main/jniLibs/x86_64/
+          cp downloaded/libpikafish-arm64-v8a/libpikafish.so $P/android/libs/arm64-v8a/
+          cp downloaded/libpikafish-x86_64/libpikafish.so    $P/android/libs/x86_64/
           cp native/android/java/com/xiangqi/engine/*.java    $P/android/src/main/java/com/xiangqi/engine/
           cp app/nativeplugins/XiangqiEngine/package.json     $P/
 
@@ -219,7 +232,7 @@ jobs:
           # 否则使用者需要手工改名才能被 HBuilderX 识别。
           mkdir -p staging-release
           cp -R $P staging-release/$P
-          rm -rf staging-release/$P/android/src/main/jniLibs/x86_64
+          rm -rf staging-release/$P/android/libs/x86_64
           echo "正式包（仅 arm64）: $(du -sm staging-release/$P | cut -f1)MB"
 
           zip -qry XiangqiEngine-android-full.zip $P

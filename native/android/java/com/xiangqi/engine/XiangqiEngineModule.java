@@ -1,6 +1,5 @@
 package com.xiangqi.engine;
 
-import android.app.Activity;
 import android.content.Context;
 
 import com.alibaba.fastjson.JSONObject;
@@ -135,7 +134,11 @@ public class XiangqiEngineModule extends UniModule {
     private File resolveNnue(Context ctx, JSONObject options) {
         // ---- 1) 外部路径 ----
         if (options != null) {
-            String p = options.optString("nnuePath", null);
+            // 注意：这里的 JSONObject 是 com.alibaba.fastjson.JSONObject，
+            // 它只有 getString(key)，没有 Android org.json 里的
+            // optString(key, fallback)；写成 optString 会直接编译失败，
+            // 导致整个插件类无法生成、requireNativePlugin 拿到 null。
+            String p = options.getString("nnuePath");
             if (p != null && p.length() > 0) {
                 // uni-app 侧可能传 file:// 前缀或 _doc/ 等逻辑路径，
                 // 这里只接受已转成系统绝对路径的形式。

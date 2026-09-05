@@ -76,7 +76,7 @@ function Test-Plugin {
     #    ~102MB, far past the 40MB free cloud-build quota. The app now
     #    downloads the weights on first launch (see app/utils/nnue.js).
     $android = @(
-        'android\src\main\jniLibs\arm64-v8a\libpikafish.so',
+        'android\libs\arm64-v8a\libpikafish.so',
         'android\src\main\java\com\xiangqi\engine\PikafishBridge.java',
         'android\src\main\java\com\xiangqi\engine\XiangqiEngineModule.java'
     )
@@ -127,7 +127,7 @@ function Test-Plugin {
     }
 
     # x86_64 is a simulator/emulator lib; drop it for release builds
-    $x86 = Join-Path $PLUGIN 'android\src\main\jniLibs\x86_64'
+    $x86 = Join-Path $PLUGIN 'android\libs\x86_64'
     if (Test-Path $x86) {
         Say-Warn 'x86_64 lib present (emulator only). Remove it for release to save ~2.4MB.'
     }

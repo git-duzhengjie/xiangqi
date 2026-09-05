@@ -77,7 +77,7 @@ app/nativeplugins/XiangqiEngine/
 | **正式包（仅 arm64）** | **约 4.2MB** ✅ |
 
 发布前请确认：
-- 删除 `jniLibs/x86_64/`（模拟器调试用，正式包不需要）
+- 删除 `android/libs/x86_64/`（模拟器调试用，正式包不需要）
 - NNUE 权重不入包，App 首次启动时下载（官方权重已涨至约 49MB）
 
 ---

@@ -1,0 +1,202 @@
+/* game.css -- 对局页面样式 */
+
+.game-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #3E2723 0%, #5D4037 100%);
+}
+
+/* ---------- 顶部栏 ---------- */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 88rpx;
+  padding: 0 24rpx;
+  padding-top: var(--status-bar-height);
+  background-color: rgba(0, 0, 0, 0.25);
+}
+.btn-back, .btn-menu {
+  color: #F5DEB3;
+  font-size: 32rpx;
+  padding: 8rpx 16rpx;
+}
+.title {
+  color: #F5DEB3;
+  font-size: 32rpx;
+  font-weight: bold;
+}
+
+/* ---------- 玩家信息条 ---------- */
+.player-bar {
+  display: flex;
+  align-items: center;
+  padding: 16rpx 28rpx;
+  margin: 12rpx 20rpx;
+  border-radius: 12rpx;
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 2rpx solid transparent;
+}
+.player-bar.active {
+  background-color: rgba(255, 215, 0, 0.15);
+  border-color: #FFD700;
+}
+.avatar {
+  width: 68rpx;
+  height: 68rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34rpx;
+  font-weight: bold;
+  background-color: #FFF8E7;
+  margin-right: 20rpx;
+}
+.avatar.red { color: #C0392B; border: 3rpx solid #C0392B; }
+.avatar.black { color: #2C3E50; border: 3rpx solid #2C3E50; }
+
+.pinfo { display: flex; flex-direction: column; }
+.pname { color: #F5DEB3; font-size: 28rpx; }
+.pstatus { color: #BCAAA4; font-size: 22rpx; margin-top: 4rpx; }
+
+/* ---------- 棋盘 ---------- */
+.board-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 8rpx 0;
+}
+.board-canvas {
+  border-radius: 8rpx;
+  box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- 操作栏 ---------- */
+.action-bar {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 20rpx 0 32rpx;
+  margin-top: auto;
+}
+.act-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12rpx 24rpx;
+  border-radius: 12rpx;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.act-btn:active { background-color: rgba(255, 255, 255, 0.2); }
+.act-icon { font-size: 36rpx; color: #F5DEB3; }
+.act-text { font-size: 22rpx; color: #D7CCC8; margin-top: 6rpx; }
+
+/* ---------- 棋谱面板 ---------- */
+.moves-panel {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  height: 55vh;
+  background-color: #FFF8E7;
+  border-radius: 24rpx 24rpx 0 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+}
+.mp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24rpx 32rpx;
+  border-bottom: 2rpx solid #E0D5C0;
+  font-size: 30rpx;
+  color: #3E2723;
+  font-weight: bold;
+}
+.mp-close { font-size: 44rpx; color: #8B5A2B; padding: 0 12rpx; }
+.mp-body { flex: 1; padding: 12rpx 0; }
+.mp-row {
+  display: flex;
+  align-items: center;
+  padding: 14rpx 32rpx;
+}
+.mp-no { width: 70rpx; color: #A1887F; font-size: 26rpx; }
+.mp-side {
+  width: 50rpx;
+  font-size: 26rpx;
+  font-weight: bold;
+}
+.mp-side.red { color: #C0392B; }
+.mp-side.black { color: #2C3E50; }
+.mp-txt { font-size: 28rpx; color: #3E2723; }
+.mp-empty {
+  text-align: center;
+  color: #A1887F;
+  font-size: 26rpx;
+  padding: 60rpx 0;
+}
+
+/* ---------- 遮罩与菜单 ---------- */
+.mask {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+.menu {
+  position: absolute;
+  right: 28rpx;
+  top: calc(var(--status-bar-height) + 96rpx);
+  background-color: #FFF8E7;
+  border-radius: 12rpx;
+  overflow: hidden;
+  min-width: 260rpx;
+}
+.menu-item {
+  padding: 28rpx 36rpx;
+  font-size: 28rpx;
+  color: #3E2723;
+  border-bottom: 2rpx solid #F0E6D2;
+}
+.menu-item:active { background-color: #F0E6D2; }
+
+/* ---------- 结果弹窗 ---------- */
+.result-box {
+  width: 600rpx;
+  background-color: #FFF8E7;
+  border-radius: 20rpx;
+  padding: 56rpx 40rpx 40rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rb-title { font-size: 44rpx; font-weight: bold; color: #3E2723; }
+.rb-sub { font-size: 26rpx; color: #8D6E63; margin-top: 20rpx; text-align: center; }
+.rb-btns { display: flex; margin-top: 44rpx; }
+.rb-btn {
+  padding: 22rpx 44rpx;
+  border-radius: 44rpx;
+  font-size: 28rpx;
+  color: #5D4037;
+  background-color: #E8DCC0;
+  margin: 0 12rpx;
+}
+.rb-btn.primary { background-color: #C0392B; color: #FFF; }
+
+/* ---------- 引擎提示 ---------- */
+.engine-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 200rpx;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.75);
+  color: #FFF;
+  font-size: 26rpx;
+  padding: 18rpx 32rpx;
+  border-radius: 40rpx;
+  z-index: 40;
+}

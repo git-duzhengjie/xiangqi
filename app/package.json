@@ -1,0 +1,13 @@
+{
+  "name": "xiangqi-master",
+  "version": "1.0.0",
+  "description": "单机中国象棋 - uniapp + Pikafish 引擎",
+  "main": "main.js",
+  "license": "GPL-3.0",
+  "scripts": {
+    "build:so": "powershell -ExecutionPolicy Bypass -File ../native/android/build_so.ps1 -Abi arm64-v8a"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "^2.0.2"
+  }
+}

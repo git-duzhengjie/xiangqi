@@ -1,0 +1,25 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "中国象棋",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/game/game",
+      "style": {
+        "navigationBarTitleText": "对局",
+        "navigationStyle": "custom",
+        "disableScroll": true
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "中国象棋",
+    "navigationBarBackgroundColor": "#8B4513",
+    "backgroundColor": "#F5DEB3"
+  }
+}

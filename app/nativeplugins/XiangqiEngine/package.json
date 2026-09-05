@@ -1,0 +1,43 @@
+{
+  "name": "XiangqiEngine",
+  "id": "XiangqiEngine",
+  "version": "1.0.0",
+  "description": "Pikafish 象棋引擎原生插件（GPLv3）",
+  "_dp_type": "nativeplugin",
+  "_dp_nativeplugin": {
+    "android": {
+      "plugins": [
+        {
+          "type": "module",
+          "name": "XiangqiEngine",
+          "class": "com.xiangqi.engine.XiangqiEngineModule"
+        }
+      ],
+      "integrateType": "aar",
+      "abis": [
+        "arm64-v8a",
+        "x86_64"
+      ],
+      "minSdkVersion": 21,
+      "useAndroidX": true
+    },
+    "ios": {
+      "plugins": [
+        {
+          "type": "module",
+          "name": "XiangqiEngine",
+          "class": "XiangqiEngineModule"
+        }
+      ],
+      "integrateType": "framework",
+      "deploymentTarget": "12.0",
+      "frameworks": [],
+      "embedFrameworks": [
+        "XiangqiEngine.framework"
+      ],
+      "resources": [
+        "pikafish.nnue"
+      ]
+    }
+  }
+}

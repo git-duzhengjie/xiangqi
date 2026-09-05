@@ -7,32 +7,35 @@
       <view class="btn-menu" @click="showMenu = !showMenu">⋮</view>
     </view>
 
-    <!-- 黑方信息 -->
-    <view class="player-bar" :class="{ active: currentSide === 'b' && !gameOver }">
-      <view class="avatar black">将</view>
-      <view class="pinfo">
-        <text class="pname">Pikafish 引擎</text>
-        <text class="pstatus">{{ blackStatus }}</text>
+    <!-- 主区：黑方 / 棋盘 / 红方，整体垂直居中 -->
+    <view class="main-area">
+      <!-- 黑方信息 -->
+      <view class="player-bar" :class="{ active: currentSide === 'b' && !gameOver }">
+        <view class="avatar black">将</view>
+        <view class="pinfo">
+          <text class="pname">Pikafish 引擎</text>
+          <text class="pstatus">{{ blackStatus }}</text>
+        </view>
       </view>
-    </view>
 
-    <!-- 棋盘 -->
-    <view class="board-wrap">
-      <canvas
-        canvas-id="boardCanvas"
-        id="boardCanvas"
-        class="board-canvas"
-        :style="{ width: boardW + 'px', height: boardH + 'px' }"
-        @touchstart="onTouch"
-      ></canvas>
-    </view>
+      <!-- 棋盘 -->
+      <view class="board-wrap">
+        <canvas
+          canvas-id="boardCanvas"
+          id="boardCanvas"
+          class="board-canvas"
+          :style="{ width: boardW + 'px', height: boardH + 'px' }"
+          @touchstart="onTouch"
+        ></canvas>
+      </view>
 
-    <!-- 红方信息 -->
-    <view class="player-bar" :class="{ active: currentSide === 'r' && !gameOver }">
-      <view class="avatar red">帅</view>
-      <view class="pinfo">
-        <text class="pname">您（红方）</text>
-        <text class="pstatus">{{ redStatus }}</text>
+      <!-- 红方信息 -->
+      <view class="player-bar" :class="{ active: currentSide === 'r' && !gameOver }">
+        <view class="avatar red">帅</view>
+        <view class="pinfo">
+          <text class="pname">您（红方）</text>
+          <text class="pstatus">{{ redStatus }}</text>
+        </view>
       </view>
     </view>
 

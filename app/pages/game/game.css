@@ -3,7 +3,8 @@
 .game-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;             /* 改为固定高度，flex:1 才能正确分配剩余空间 */
+  overflow: hidden;
   background: linear-gradient(180deg, #3E2723 0%, #5D4037 100%);
 }
 
@@ -12,10 +13,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 88rpx;
+  /* 固定 88rpx 是内容行高度，状态栏高度额外叠加，
+     否则 padding-top 会把内容挤出容器造成与状态栏重叠 */
+  height: calc(88rpx + var(--status-bar-height));
+  box-sizing: border-box;
   padding: 0 24rpx;
   padding-top: var(--status-bar-height);
   background-color: rgba(0, 0, 0, 0.25);
+  flex-shrink: 0;
 }
 .btn-back, .btn-menu {
   color: #F5DEB3;
@@ -28,6 +33,15 @@
   font-weight: bold;
 }
 
+/* ---------- 主区（垂直居中）---------- */
+.main-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;   /* 剥余空间平均分到上下，不再堆在底部 */
+  min-height: 0;             /* 允许 flex 子项正常收缩，防止溢出 */
+}
+
 /* ---------- 玩家信息条 ---------- */
 .player-bar {
   display: flex;
@@ -37,6 +51,7 @@
   border-radius: 12rpx;
   background-color: rgba(255, 255, 255, 0.08);
   border: 2rpx solid transparent;
+  flex-shrink: 0;
 }
 .player-bar.active {
   background-color: rgba(255, 215, 0, 0.15);
@@ -78,8 +93,11 @@
   display: flex;
   justify-content: space-around;
   align-items: center;
-  padding: 20rpx 0 32rpx;
-  margin-top: auto;
+  /* 不用顶部自动外边距，否则会吸走剩余空间使主区无法居中；
+     底部额外预留 iPhone 全面屏 Home 条安全区 */
+  padding: 20rpx 0 calc(32rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(32rpx + env(safe-area-inset-bottom));
+  flex-shrink: 0;
 }
 .act-btn {
   display: flex;

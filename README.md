@@ -89,8 +89,17 @@ xiangqi/
 |--------|------|---------|
 | **Build Android Engine** | `libpikafish.so` 双 ABI + 已组装插件包 | Linux |
 | **Build iOS Engine** | `XiangqiEngine.framework` + 静态库 | macOS |
+| **Release** | 上述全部 + 前端源码包 | 双端并行 |
 
 仓库 → **Actions** → 选对应工作流 → **Run workflow**，完成后下载产物即可。
+
+发布正式版本只需打 tag，双端产物会自动聚合到同一个 Release：
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+详见 [发布流程](docs/%E5%8F%91%E5%B8%83%E6%B5%81%E7%A8%8B.md)。
 
 CI 已内置两道校验：ELF 架构正确性、JNI 符号完整导出（后者漏了会在运行时才报
 `UnsatisfiedLinkError`，极难排查）。

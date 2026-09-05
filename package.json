@@ -1,0 +1,14 @@
+{
+  "name": "xiangqi-repo",
+  "version": "1.0.0",
+  "private": true,
+  "license": "GPL-3.0",
+  "description": "仓库根配置：仅用于运行 tests/ 下的测试脚本",
+  "//": "app/utils/*.js 使用 ES module 语法。若不声明 type=module，Node 会先按 CommonJS 解析失败后再回退，产生警告且有性能开销。此处显式声明，避免依赖隐式回退行为。注意：不要把 type=module 加到 app/package.json，那会影响 uni-app 构建。",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/test_rules.mjs && node tests/test_sim.mjs",
+    "test:rules": "node tests/test_rules.mjs",
+    "test:sim": "node tests/test_sim.mjs"
+  }
+}

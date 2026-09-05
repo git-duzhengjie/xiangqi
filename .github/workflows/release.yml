@@ -1,0 +1,207 @@
+name: Release
+
+# =====================================================================
+#  统一发布工作流：一个 tag 同时产出 Android + iOS 全部构建物。
+#
+#  设计要点：
+#    1. 复用 build-android.yml / build-ios.yml（workflow_call），
+#       不复制编译逻辑 —— 否则三处参数各改一份必然走偏。
+#    2. 双端并行构建，最后由 release 作业聚合产物统一发布，
+#       避免多个作业各自发布同一 tag 导致产物互相覆盖。
+#    3. iOS 允许失败（continue-on-error），因为 iOS 构建链路更脆弱；
+#       Android 成功即可发布，Release 说明中会标注 iOS 状态。
+#
+#  触发方式：
+#    - 打 tag：git tag v1.0.0 && git push origin v1.0.0
+#    - 手动触发：Actions 页面输入版本号
+# =====================================================================
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 v1.0.0），手动触发时用于命名'
+        required: true
+        default: 'v0.0.0-manual'
+      prerelease:
+        description: '标记为预发布版本'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # 创建 Release 需要写权限
+
+jobs:
+  # -----------------------------------------------------------------
+  #  1) 前置校验：规则引擎测试必须通过才允许发版
+  # -----------------------------------------------------------------
+  verify:
+    name: 校验规则引擎
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 规则引擎单测
+        run: node tests/test_rules.mjs
+
+      - name: 端到端模拟对局
+        run: node tests/test_sim.mjs
+
+  # -----------------------------------------------------------------
+  #  2) 双端并行构建（复用已有工作流）
+  # -----------------------------------------------------------------
+  android:
+    name: 构建 Android
+    needs: verify
+    uses: ./.github/workflows/build-android.yml
+
+  ios:
+    name: 构建 iOS
+    needs: verify
+    uses: ./.github/workflows/build-ios.yml
+    # iOS 链路依赖 Xcode 环境，较易受 runner 镜像变动影响。
+    # 允许失败，不阻塞 Android 发版。
+    continue-on-error: true
+
+  # -----------------------------------------------------------------
+  #  3) 聚合产物并发布
+  # -----------------------------------------------------------------
+  release:
+    name: 发布 Release
+    needs: [android, ios]
+    if: always() && needs.android.result == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确定版本号
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "发布版本: $V"
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理发布文件
+        id: files
+        run: |
+          set -e
+          mkdir -p release
+          cd artifacts && find . -type f | sort && cd ..
+
+          # Android 插件包（build-android.yml 的 package-plugin 作业产出）
+          if [ -d artifacts/XiangqiEngine-plugin-android ]; then
+            cp artifacts/XiangqiEngine-plugin-android/*.zip release/ 2>/dev/null || true
+          fi
+
+          # iOS 产物（可能因构建失败而缺失）
+          if [ -f artifacts/XiangqiEngine-iOS/XiangqiEngine-iOS.zip ]; then
+            cp artifacts/XiangqiEngine-iOS/XiangqiEngine-iOS.zip release/
+            echo "ios_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "ios_ok=false" >> $GITHUB_OUTPUT
+            echo "警告：iOS 产物缺失，本次仅发布 Android"
+          fi
+
+          # 附带前端源码包，方便直接导入 HBuilderX
+          zip -qry release/xiangqi-app-source.zip app docs README.md LICENSE \
+            -x 'app/unpackage/*' -x 'app/node_modules/*'
+
+          echo ""
+          echo "=== 发布文件清单 ==="
+          ls -lh release/
+          for f in release/*; do
+            echo "$(basename $f): $(du -m $f | cut -f1)MB"
+          done
+
+      - name: 生成发布说明
+        run: |
+          IOS_OK="${{ steps.files.outputs.ios_ok }}"
+          if [ "$IOS_OK" = "true" ]; then
+            IOS_LINE='- `XiangqiEngine-iOS.zip` — iOS 原生插件（framework + 静态库 + 权重）'
+            IOS_NOTE=''
+          else
+            IOS_LINE='- ⚠️ iOS 产物本次构建失败，请到 Actions 页面查看日志'
+            IOS_NOTE=$'\n> **注意**：本次 iOS 构建未成功，仅提供 Android 产物。\n'
+          fi
+
+          cat > NOTES.md <<EOF
+          ## 中国象棋 ${{ steps.ver.outputs.version }}
+
+          由 GitHub Actions 自动构建（Android 用 Linux runner，iOS 用 macOS runner）。
+          ${IOS_NOTE}
+          ### 构建产物
+
+          - \`XiangqiEngine-android-release.zip\` — **正式发布用**，仅 arm64，约 14MB
+          - \`XiangqiEngine-android-full.zip\` — 含 x86_64 模拟器库，约 26MB
+          ${IOS_LINE}
+          - \`xiangqi-app-source.zip\` — uni-app 前端源码，可直接导入 HBuilderX
+
+          ### 使用方法
+
+          1. 下载 \`XiangqiEngine-android-release.zip\` 并解压
+          2. 把 \`XiangqiEngine/\` 目录放到 \`app/nativeplugins/\`
+          3. HBuilderX 打开 \`app/\`，manifest.json → App 原生插件配置 → **选择本地插件**
+          4. 发行 → 原生App-云打包
+
+          详见 [无 Mac 开发指南](https://github.com/${{ github.repository }}/blob/main/docs/无Mac开发指南.md)
+
+          ### 质量校验
+
+          本次发布已通过：
+          - 规则引擎单测 28 项（含开局合法走法数 = 44 基准校验）
+          - 端到端随机对局模拟（UCI 往返、中文记谱、局面裁决）
+          - ELF 架构与 JNI 符号导出校验
+
+          ### 开源许可
+
+          本项目采用 **GPL-3.0**，内置 [Pikafish](https://github.com/official-pikafish/Pikafish) 引擎同为 GPLv3。
+          分发时须提供源码获取途径并保留原始版权声明。
+          EOF
+
+          echo "=== 发布说明 ==="
+          cat NOTES.md
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 中国象棋 ${{ steps.ver.outputs.version }}
+          tag_name: ${{ steps.ver.outputs.version }}
+          body_path: NOTES.md
+          files: release/*
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+
+  # -----------------------------------------------------------------
+  #  4) Android 失败时给出明确提示
+  # -----------------------------------------------------------------
+  notify-failure:
+    name: 构建失败提示
+    needs: [android, ios]
+    if: always() && needs.android.result != 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 输出失败原因
+        run: |
+          echo "::error::Android 构建失败，已中止发布。"
+          echo "Android 结果: ${{ needs.android.result }}"
+          echo "iOS 结果    : ${{ needs.ios.result }}"
+          echo ""
+          echo "Android 是发布的必要条件，请先修复后重新打 tag。"
+          exit 1

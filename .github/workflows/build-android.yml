@@ -8,10 +8,13 @@ name: Build Android Engine
 #
 #  注意：CI 用 Linux runner（免费额度更省，且公开仓库不限量）。
 #        NDK 由 setup-ndk action 提供，不依赖 runner 预装版本。
+#
+#  发布由 release.yml 统一聚合，本工作流只负责产出 artifact。
 # =====================================================================
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches: [main]
     paths:

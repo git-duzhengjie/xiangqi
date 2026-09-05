@@ -8,14 +8,16 @@ name: Build iOS Engine
 #
 #  触发方式：
 #    - 手动触发（Actions 页面点 Run workflow）
-#    - 打 tag 时自动触发并发布 Release
+#    - 被 release.yml 调用（workflow_call）
+#
+#  注意：本工作流不再自行发布 Release。
+#        发布统一由 release.yml 聚合双端产物后完成，
+#        避免同一 tag 触发多次发布导致产物互相覆盖。
 # =====================================================================
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
 
 jobs:
   build-ios:
@@ -97,21 +99,3 @@ jobs:
           path: XiangqiEngine-iOS.zip
           retention-days: 30
 
-      # ---------------------------------------------------------------
-      #  打 tag 时自动发布 Release
-      # ---------------------------------------------------------------
-      - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: XiangqiEngine-iOS.zip
-          body: |
-            iOS 引擎构建产物（由 GitHub Actions macOS runner 自动编译）
-
-            包含：
-            - `XiangqiEngine.framework` — uni-app iOS 原生插件
-            - `libpikafish-device.a` — 真机 arm64 静态库
-            - `libpikafish-sim.a` — 模拟器静态库
-            - `pikafish.nnue` — NNUE 权重
-
-            使用方式见仓库 `docs/无Mac开发指南.md`

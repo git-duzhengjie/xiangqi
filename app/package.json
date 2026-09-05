@@ -4,6 +4,8 @@
   "description": "单机中国象棋 - uniapp + Pikafish 引擎",
   "main": "main.js",
   "license": "GPL-3.0",
+  "//type": "utils/*.js 采用 ES module 语法。不声明时 Node 会先按 CommonJS 解析失败再回退为 ESM，产生警告且有性能开销（MODULE_TYPELESS_PACKAGE_JSON）。显式声明以依赖确定行为。",
+  "type": "module",
   "scripts": {
     "build:so": "powershell -ExecutionPolicy Bypass -File ../native/android/build_so.ps1 -Abi arm64-v8a"
   },

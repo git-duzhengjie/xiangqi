@@ -80,7 +80,24 @@ xiangqi/
 
 ## 快速开始
 
-### 环境要求
+> **只有 Windows 电脑？** 看 [无 Mac 开发指南](docs/%E6%97%A0Mac%E5%BC%80%E5%8F%91%E6%8C%87%E5%8D%97.md) ——
+> 用 GitHub Actions 的 macOS 机器编 iOS 库（公开仓库免费），本地只需 HBuilderX。
+
+### 方式 A：用 CI 构建（推荐，无需本地 NDK / Xcode）
+
+| 工作流 | 产物 | 运行环境 |
+|--------|------|---------|
+| **Build Android Engine** | `libpikafish.so` 双 ABI + 已组装插件包 | Linux |
+| **Build iOS Engine** | `XiangqiEngine.framework` + 静态库 | macOS |
+
+仓库 → **Actions** → 选对应工作流 → **Run workflow**，完成后下载产物即可。
+
+CI 已内置两道校验：ELF 架构正确性、JNI 符号完整导出（后者漏了会在运行时才报
+`UnsatisfiedLinkError`，极难排查）。
+
+### 方式 B：本地构建
+
+#### 环境要求
 
 | 工具 | 版本 | 用途 |
 |------|------|------|

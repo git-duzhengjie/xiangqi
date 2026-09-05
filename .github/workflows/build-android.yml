@@ -1,0 +1,196 @@
+name: Build Android Engine
+
+# =====================================================================
+#  在 CI 上编译 Pikafish Android 共享库（libpikafish.so）。
+#
+#  好处：开发者本地无需安装 Android NDK，也不必手工组装插件目录，
+#        直接下载产物即可用于 uni-app 云打包。
+#
+#  注意：CI 用 Linux runner（免费额度更省，且公开仓库不限量）。
+#        NDK 由 setup-ndk action 提供，不依赖 runner 预装版本。
+# =====================================================================
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'native/android/**'
+      - '.github/workflows/build-android.yml'
+  pull_request:
+    paths:
+      - 'native/android/**'
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      # Pikafish 官方要求 NDK r27+（低版本缺少必要的 C++17 支持）
+      - name: 安装 Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          local-cache: true
+
+      - name: 拉取 Pikafish 源码
+        run: |
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git engine-src
+          echo "源码文件数: $(find engine-src/src -name '*.cpp' | wc -l)"
+
+      # ---------------------------------------------------------------
+      #  编译。这里直接用 clang++ 而非项目里的 PowerShell 脚本，
+      #  因为 runner 是 Linux；编译参数与 build_so.ps1 严格保持一致。
+      # ---------------------------------------------------------------
+      - name: 编译 libpikafish.so
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          set -e
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CLANG="$TOOLCHAIN/bin/clang++"
+
+          # 目标三元组与架构专属参数
+          if [ "$ABI" = "arm64-v8a" ]; then
+            TARGET="aarch64-linux-android21"
+            ARCH_FLAGS="-DUSE_NEON=8 -DUSE_POPCNT"
+          else
+            TARGET="x86_64-linux-android21"
+            # x86_64 需禁用 zstd 汇编，否则 .S 文件不参与构建会报错
+            ARCH_FLAGS="-DUSE_SSE41 -DUSE_SSSE3 -DUSE_SSE2 -DUSE_POPCNT -mpopcnt -msse4.1 -DZSTD_DISABLE_ASM=1"
+          fi
+
+          # -DIS_64BIT 必需：象棋 90 格棋盘需要 unsigned __int128
+          COMMON="-std=c++17 -O3 -DNDEBUG -DIS_64BIT -DNNUE_EMBEDDING_OFF -fPIC -fno-rtti -fvisibility=hidden"
+
+          mkdir -p build/$ABI obj
+          SOURCES=$(find engine-src/src -name '*.cpp' ! -name 'main.cpp')
+          SOURCES="$SOURCES native/android/jni/engine_main.cpp native/android/jni/pikafish_jni.cpp"
+
+          echo "==> compiling for $ABI ($TARGET)"
+          i=0
+          for f in $SOURCES; do
+            i=$((i+1))
+            base=$(basename "$f" .cpp)
+            $CLANG --target=$TARGET $COMMON $ARCH_FLAGS \
+              -Iengine-src/src -Iengine-src/src/external \
+              -c "$f" -o "obj/${i}_${base}.o" &
+            while [ "$(jobs -r | wc -l)" -ge "$(nproc)" ]; do sleep 0.1; done
+          done
+          wait
+
+          echo "==> linking"
+          $CLANG --target=$TARGET -shared -o build/$ABI/libpikafish.so \
+            obj/*.o -llog -static-libstdc++ -Wl,--gc-sections -s
+
+          ls -lh build/$ABI/libpikafish.so
+
+      # ---------------------------------------------------------------
+      #  校验：ELF 架构正确 + JNI 符号完整导出
+      #  （符号漏导出是最隐蔽的坑，运行时才报 UnsatisfiedLinkError）
+      # ---------------------------------------------------------------
+      - name: 校验产物
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          set -e
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          SO="build/$ABI/libpikafish.so"
+
+          echo "=== ELF 头 ==="
+          $READELF -h "$SO" | grep -E 'Class|Machine|Type'
+
+          echo ""
+          echo "=== JNI 符号检查 ==="
+          MISSING=0
+          for sym in \
+            Java_com_xiangqi_engine_PikafishBridge_nativeInit \
+            Java_com_xiangqi_engine_PikafishBridge_nativeSend \
+            Java_com_xiangqi_engine_PikafishBridge_nativeReadLine \
+            pikafish_main
+          do
+            if $READELF --dyn-syms "$SO" | grep -q "$sym"; then
+              echo "  OK      $sym"
+            else
+              echo "  MISSING $sym"
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || { echo "符号导出不完整，构建失败"; exit 1; }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: libpikafish-${{ matrix.abi }}
+          path: build/${{ matrix.abi }}/libpikafish.so
+          retention-days: 30
+
+  # -----------------------------------------------------------------
+  #  把两个 ABI 的产物 + 权重 + Java 源码打成可直接使用的插件包
+  # -----------------------------------------------------------------
+  package-plugin:
+    needs: build-android
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 下载所有 ABI 产物
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+
+      - name: 下载 NNUE 权重
+        run: |
+          curl -fsSL --retry 3 -o pikafish.nnue \
+            https://github.com/official-pikafish/Networks/releases/latest/download/pikafish.nnue
+          ls -lh pikafish.nnue
+
+      - name: 组装插件目录
+        run: |
+          set -e
+          P="XiangqiEngine"
+          mkdir -p $P/android/src/main/jniLibs/arm64-v8a
+          mkdir -p $P/android/src/main/jniLibs/x86_64
+          mkdir -p $P/android/src/main/assets
+          mkdir -p $P/android/src/main/java/com/xiangqi/engine
+
+          cp downloaded/libpikafish-arm64-v8a/libpikafish.so $P/android/src/main/jniLibs/arm64-v8a/
+          cp downloaded/libpikafish-x86_64/libpikafish.so    $P/android/src/main/jniLibs/x86_64/
+          cp pikafish.nnue                                    $P/android/src/main/assets/
+          cp native/android/java/com/xiangqi/engine/*.java    $P/android/src/main/java/com/xiangqi/engine/
+          cp app/nativeplugins/XiangqiEngine/package.json     $P/
+
+          echo "=== 插件目录结构 ==="
+          find $P -type f | sort
+          echo ""
+          echo "=== 体积统计（云打包免费额度 40MB）==="
+          du -sh $P
+          echo "完整包（含 x86_64 调试库）: $(du -sm $P | cut -f1)MB"
+
+          # 另出一份正式发布包：去掉模拟器库，体积腰斩
+          cp -R $P ${P}-release
+          rm -rf ${P}-release/android/src/main/jniLibs/x86_64
+          echo "正式包（仅 arm64）: $(du -sm ${P}-release | cut -f1)MB"
+
+          zip -qry XiangqiEngine-android-full.zip $P
+          zip -qry XiangqiEngine-android-release.zip ${P}-release
+
+      - name: 上传插件包
+        uses: actions/upload-artifact@v4
+        with:
+          name: XiangqiEngine-plugin-android
+          path: XiangqiEngine-android-*.zip
+          retention-days: 30

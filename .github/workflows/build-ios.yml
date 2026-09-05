@@ -1,0 +1,117 @@
+name: Build iOS Engine
+
+# =====================================================================
+#  在 GitHub 提供的 macOS 机器上编译 Pikafish iOS 静态库。
+#  用途：开发者无 Mac 设备时，用 CI 产出 iOS 打包所需的二进制。
+#
+#  公开仓库使用标准 GitHub-hosted runner 免费且不限分钟数。
+#
+#  触发方式：
+#    - 手动触发（Actions 页面点 Run workflow）
+#    - 打 tag 时自动触发并发布 Release
+# =====================================================================
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 显示构建环境
+        run: |
+          echo "macOS: $(sw_vers -productVersion)"
+          echo "Xcode: $(xcodebuild -version | head -1)"
+          echo "clang: $(clang --version | head -1)"
+          echo "CPU核心: $(sysctl -n hw.ncpu)"
+
+      # ---------------------------------------------------------------
+      #  引擎源码不入库（体积原因），构建时拉取
+      # ---------------------------------------------------------------
+      - name: 拉取 Pikafish 源码
+        run: |
+          git clone --depth 1 https://github.com/official-pikafish/Pikafish.git engine-src
+          echo "源码文件数: $(find engine-src/src -name '*.cpp' | wc -l)"
+
+      - name: 下载 NNUE 权重
+        run: |
+          curl -fsSL --retry 3 -o pikafish.nnue \
+            https://github.com/official-pikafish/Networks/releases/latest/download/pikafish.nnue
+          ls -lh pikafish.nnue
+
+      # ---------------------------------------------------------------
+      #  编译静态库：真机 arm64 + 模拟器 arm64/x86_64
+      # ---------------------------------------------------------------
+      - name: 编译 iOS 静态库
+        run: |
+          chmod +x native/ios/build_ios.sh
+          ./native/ios/build_ios.sh
+
+      - name: 校验产物架构
+        run: |
+          echo "=== 产物列表 ==="
+          ls -lh build/ios/*.a
+          echo ""
+          for f in build/ios/*.a; do
+            echo "--- $f ---"
+            lipo -info "$f"
+            # 确认关键符号存在
+            if nm "$f" 2>/dev/null | grep -q 'pikafish_main'; then
+              echo "  符号 pikafish_main: OK"
+            else
+              echo "  符号 pikafish_main: MISSING"
+              exit 1
+            fi
+          done
+
+      # ---------------------------------------------------------------
+      #  组装 framework（供 uni-app 云打包使用）
+      # ---------------------------------------------------------------
+      - name: 组装 XiangqiEngine.framework
+        run: |
+          chmod +x native/ios/make_framework.sh
+          ./native/ios/make_framework.sh
+
+      - name: 打包产物
+        run: |
+          mkdir -p artifact
+          cp -R build/ios/XiangqiEngine.framework artifact/ 2>/dev/null || true
+          cp build/ios/*.a artifact/
+          cp pikafish.nnue artifact/
+          cp native/ios/IOS_集成说明.md artifact/ 2>/dev/null || true
+          cd artifact && zip -qry ../XiangqiEngine-iOS.zip . && cd ..
+          ls -lh XiangqiEngine-iOS.zip
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: XiangqiEngine-iOS
+          path: XiangqiEngine-iOS.zip
+          retention-days: 30
+
+      # ---------------------------------------------------------------
+      #  打 tag 时自动发布 Release
+      # ---------------------------------------------------------------
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: XiangqiEngine-iOS.zip
+          body: |
+            iOS 引擎构建产物（由 GitHub Actions macOS runner 自动编译）
+
+            包含：
+            - `XiangqiEngine.framework` — uni-app iOS 原生插件
+            - `libpikafish-device.a` — 真机 arm64 静态库
+            - `libpikafish-sim.a` — 模拟器静态库
+            - `pikafish.nnue` — NNUE 权重
+
+            使用方式见仓库 `docs/无Mac开发指南.md`

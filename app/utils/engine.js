@@ -14,7 +14,7 @@
  */
 
 import { DIFFICULTY_LEVELS } from './constants.js'
-import { getLocalNnue, downloadNnue } from './nnue.js'
+import { ensureNnue } from './nnue.js'
 
 const PLUGIN_NAME = 'XiangqiEngine'
 
@@ -61,21 +61,22 @@ class XiangqiEngine {
       }
 
       // ---- 准备权重 ----
+      // 必须使用 ensureNnue：它统一把路径转成原生可用的绝对路径。
+      // 曾经的 bug：缓存分支直接用 getLocalNnue() 的返回值，那是
+      // _downloads/... 这种 uni-app 逻辑路径，原生标准 C 文件 IO 不认识，
+      // 导致「首次下载能用、杀掉 App 重进就报 nnue 不可用」。
       let nnuePath = ''
       try {
-        const cached = await getLocalNnue()
-        if (cached) {
-          nnuePath = cached
+        const r = await ensureNnue(opts.autoDownload ? opts.onProgress : null)
+        if (r && r.success) {
+          nnuePath = r.path
         } else if (opts.autoDownload) {
-          const dl = await downloadNnue(opts.onProgress)
-          if (!dl.success) {
-            resolve({ success: false, needDownload: true, error: dl.error })
-            return
-          }
-          nnuePath = dl.path
+          // 允许下载却仍失败，说明确实拿不到权重
+          resolve({ success: false, needDownload: true, error: r && r.error })
+          return
         }
-        // nnuePath 为空时不直接报错：插件里可能内置了权重（开发阶段），
-        // 交由原生层回退判定，它找不到才会回传 needDownload。
+        // 不允许自动下载时 nnuePath 保持为空：
+        // 插件可能内置权重（开发阶段），交由原生层回退判定。
       } catch (e) {
         // 权重准备失败不应阻止尝试初始化，仍给原生层一次机会
         nnuePath = ''

@@ -119,9 +119,24 @@ export function downloadNnue(onProgress) {
     // #ifdef APP-PLUS
     let mirrorIndex = 0
 
+    // 看门狗状态：记录最后一次有新数据的时间，停滞太久就换源
+    const STALL_MS = 25000     // 25 秒没任何新字节，视为该源无效
+    let watchdog = null
+    let lastTick = 0
+    let lastSize = 0
+    let settled = false
+
+    const done = r => {
+      if (settled) return
+      settled = true
+      if (watchdog) clearInterval(watchdog)
+      resolve(r)
+    }
+
     const tryOne = () => {
+      if (watchdog) clearInterval(watchdog)
       if (mirrorIndex >= NNUE_MIRRORS.length) {
-        resolve({ success: false, error: '所有下载源均失败，请检查网络后重试' })
+        done({ success: false, error: '所有下载源均失败，请检查网络后重试' })
         return
       }
 
@@ -154,7 +169,7 @@ export function downloadNnue(onProgress) {
                     }
                     const abs = await toAbsolutePath(download.filename)
                     uni.setStorageSync(STORAGE_KEY, download.filename)
-                    resolve({ success: true, path: abs, size: file.size })
+                    done({ success: true, path: abs, size: file.size })
                   },
                   () => tryOne()
                 )
@@ -169,12 +184,38 @@ export function downloadNnue(onProgress) {
       )
 
       task.addEventListener('statechanged', (d) => {
-        if (!d || typeof onProgress !== 'function') return
+        if (!d) return
         if (d.state === 3 && d.totalSize > 0) {
-          const percent = Math.floor((d.downloadedSize / d.totalSize) * 100)
-          onProgress(percent, d.downloadedSize, d.totalSize)
+          // 有数据到达就算有进展，刷新看门狗时间戳
+          if (d.downloadedSize > lastSize) {
+            lastSize = d.downloadedSize
+            lastTick = Date.now()
+          }
+          if (typeof onProgress === 'function') {
+            const percent = Math.floor((d.downloadedSize / d.totalSize) * 100)
+            onProgress(percent, d.downloadedSize, d.totalSize)
+          }
         }
       })
+
+      // ----------------------------------------------------------
+      //  停滞看门狗
+      //
+      //  plus.downloader 的 timeout 只管「连不上」，不管「连上了但不给
+      //  数据」。镜像站若接受了连接却迟迟不响应，回调永远不触发，
+      //  上层 Promise 跟着一起挂死，UI 就定在「引擎加载中…」。
+      //  这里自己盯：超过 STALL_MS 没任何新字节就弃用该源，换下一个。
+      // ----------------------------------------------------------
+      lastTick = Date.now()
+      lastSize = 0
+      watchdog = setInterval(() => {
+        if (settled) { clearInterval(watchdog); return }
+        if (Date.now() - lastTick > STALL_MS) {
+          clearInterval(watchdog)
+          try { task.abort() } catch (e) {}
+          tryOne()   // 换下一个镜像
+        }
+      }, 2000)
 
       task.start()
     }

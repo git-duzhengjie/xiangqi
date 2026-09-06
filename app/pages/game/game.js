@@ -144,6 +144,11 @@ export default {
       this.engineMsg = '引擎加载中…'
       const res = await engine.init({
         autoDownload: true,
+        // 阶段回调：一直停在「引擎加载中…」时看不出卡在哪一步，
+        // 把当前步骤显示出来，用户截个图就能定位
+        onStage: (s) => {
+          this.engineMsg = '引擎加载中：' + s
+        },
         onProgress: (percent) => {
           this.engineMsg = `下载引擎数据 ${percent}%`
         }
@@ -154,6 +159,10 @@ export default {
         engine.newGame()
         this.engineMsg = '引擎就绪 ✓'
         setTimeout(() => { this.engineMsg = '' }, 1500)
+      } else if (res.timeout) {
+        // 超时单独提示并带出阶段名，避免只给一个笼统的失败
+        this.engineMsg = '引擎启动超时（卡在：' + (res.stage || '未知') + '），请重试'
+        setTimeout(() => { this.engineMsg = '' }, 8000)
       } else {
         this.engineMsg = '引擎失败：' + (res.error || '未知')
         setTimeout(() => { this.engineMsg = '' }, 5000)

@@ -54,9 +54,46 @@ class XiangqiEngine {
    */
   init(opts = {}) {
     return new Promise(async resolve => {
+      // ------------------------------------------------------------
+      //  超时兜底
+      //
+      //  这里原先只在 initEngine 的回调里 resolve。一旦原生层没回调
+      //  （权重下载卡住、nativeInit 内部阻塞、回调被吞掉等），Promise
+      //  就永远挂起，UI 上表现为「引擎加载中…」一直不动，且看不出
+      //  卡在哪一步 —— 排查时毫无线索。
+      //
+      //  现在做两件事：
+      //    1. 全链路超时，到点必定 resolve，UI 不会再无限等待
+      //    2. 记录当前阶段，超时后把阶段名带出去，一眼看出卡在哪
+      // ------------------------------------------------------------
+      let done = false
+      let timer = null
+      let stageName = 'start'
+
+      const stage = s => {
+        stageName = s
+        if (typeof opts.onStage === 'function') opts.onStage(s)
+      }
+      const finish = r => {
+        if (done) return          // 超时与正常回调可能都触发，只认第一次
+        done = true
+        if (timer) clearTimeout(timer)
+        resolve(r)
+      }
+
+      timer = setTimeout(() => {
+        finish({
+          success: false,
+          timeout: true,
+          stage: stageName,
+          error: '引擎初始化超时，卡在：' + stageName
+        })
+      }, opts.timeout || 120000)
+
+      stage('获取插件')
       const p = this._getPlugin()
       if (!p) {
-        resolve({ success: false, error: '原生插件不可用（请使用自定义基座运行）' })
+        finish({ success: false, error: '原生插件不可用（请使用自定义基座运行）' })
         return
       }
 
@@ -67,12 +104,14 @@ class XiangqiEngine {
       // 导致「首次下载能用、杀掉 App 重进就报 nnue 不可用」。
       let nnuePath = ''
       try {
+        stage('准备权重')
         const r = await ensureNnue(opts.autoDownload ? opts.onProgress : null)
+        if (done) return          // 已超时退出，别再往下走
         if (r && r.success) {
           nnuePath = r.path
         } else if (opts.autoDownload) {
           // 允许下载却仍失败，说明确实拿不到权重
-          resolve({ success: false, needDownload: true, error: r && r.error })
+          finish({ success: false, needDownload: true, error: r && r.error })
           return
         }
         // 不允许自动下载时 nnuePath 保持为空：
@@ -88,6 +127,7 @@ class XiangqiEngine {
         this._handleLine(res.line)
       })
 
+      stage('启动引擎')
       p.initEngine({ nnuePath }, res => {
         this.inited = !!(res && res.success)
         if (this.inited) {
@@ -95,7 +135,7 @@ class XiangqiEngine {
           const cores = this._cpuCores()
           p.setOptions({ threads: Math.max(1, cores - 1), hash: 64 }, () => {})
         }
-        resolve(res || { success: false, error: 'no response' })
+        finish(res || { success: false, error: 'no response' })
       })
     })
   }

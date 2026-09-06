@@ -25,7 +25,15 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // Pikafish 内部入口（来自 main.cpp 的重命名版本，见 engine_main.cpp）
-extern int pikafish_main(int argc, char* argv[]);
+//
+// ⚠️ 必须带 extern "C"：engine_main.cpp 中该函数是以 extern "C" 定义的，
+//    符号名为 pikafish_main；这里若只写 extern（C++ 链接），编译器会按
+//    C++ 规则修饰成 _Z13pikafish_mainiPPc，与定义端对不上。
+//    单独编译每个 .cpp 都不会报错，直到最后 -shared 链接才留下一个
+//    未解析符号，而链接默认不报错、照样产出 .so，运行期才炸成
+//    「dlopen failed: failed to link libpikafish.so」，极难排查。
+//    工作流已加 -Wl,--no-undefined，此类问题今后会在链接期直接失败。
+extern "C" int pikafish_main(int argc, char* argv[]);
 
 namespace {
 

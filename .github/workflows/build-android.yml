@@ -128,8 +128,16 @@ jobs:
           wait
 
           echo "==> linking"
+          # -Wl,--no-undefined 是关键防线：
+          #   链接共享库时，ld 默认允许未解析符号存在（留给运行时再找），
+          #   所以即使符号根本没人实现，.so 照样能生成、CI 照样绿灯，
+          #   直到手机上 dlopen 才报「failed to link libpikafish.so」。
+          #   曾因 pikafish_jni.cpp 声明 pikafish_main 时漏写 extern "C"，
+          #   符号被修饰成 _Z13pikafish_mainiPPc 与定义端对不上，
+          #   就是这样一路漏到真机的。加上它以后此类错误当场链接失败。
           $CLANG --target=$TARGET -shared -o build/$ABI/libpikafish.so \
-            obj/*.o -llog -static-libstdc++ -Wl,--gc-sections -s
+            obj/*.o -llog -static-libstdc++ \
+            -Wl,--no-undefined -Wl,--gc-sections -s
 
           ls -lh build/$ABI/libpikafish.so
 
@@ -154,10 +162,14 @@ jobs:
           for sym in \
             Java_com_xiangqi_engine_PikafishBridge_nativeInit \
             Java_com_xiangqi_engine_PikafishBridge_nativeSend \
-            Java_com_xiangqi_engine_PikafishBridge_nativeReadLine \
-            pikafish_main
+            Java_com_xiangqi_engine_PikafishBridge_nativeReadLine
           do
-            if $READELF --dyn-syms "$SO" | grep -q "$sym"; then
+            # 用 -w 全词匹配：早先这里还检查了 pikafish_main，但用的是
+            # grep -q 子串匹配，而损坏的符号 _Z13pikafish_mainiPPc 恰好含有
+            # 这个子串，于是一直显示 OK，把真问题掩盖了。
+            # 现在 pikafish_main 是 .so 内部符号（不导出），改由下面的
+            # check-so.cjs 根据「有无未解析符号」来把关，更可靠。
+            if $READELF --dyn-syms "$SO" | grep -qw "$sym"; then
               echo "  OK      $sym"
             else
               echo "  MISSING $sym"
@@ -165,6 +177,12 @@ jobs:
             fi
           done
           [ "$MISSING" -eq 0 ] || { echo "符号导出不完整，构建失败"; exit 1; }
+
+          # 再用 ELF 解析脚本把一道关：重点查未解析符号
+          echo ""
+          mkdir -p _chk/$ABI
+          cp "$SO" _chk/$ABI/
+          node scripts/check-so.cjs _chk
 
       - name: 上传产物
         uses: actions/upload-artifact@v4

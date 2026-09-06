@@ -75,10 +75,13 @@ function Test-Plugin {
     #    grew to ~49MB in 2026-07; bundling them would push the plugin to
     #    ~102MB, far past the 40MB free cloud-build quota. The app now
     #    downloads the weights on first launch (see app/utils/nnue.js).
+    #    Cloud build only consumes compiled artifacts (integrateType=jar).
+    #    It does NOT compile .java under android/src -- checking for those
+    #    sources was a leftover from the old broken layout and produced
+    #    false [FAIL] lines even on a perfectly good install.
     $android = @(
         'android\libs\arm64-v8a\libpikafish.so',
-        'android\src\main\java\com\xiangqi\engine\PikafishBridge.java',
-        'android\src\main\java\com\xiangqi\engine\XiangqiEngineModule.java'
+        'android\libs\xiangqi-engine.jar'
     )
     foreach ($f in $android) {
         $p = Join-Path $PLUGIN $f

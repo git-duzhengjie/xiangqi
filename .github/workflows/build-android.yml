@@ -195,6 +195,71 @@ jobs:
       - name: 校验 Java 源码可编译
         run: node scripts/check-android-plugin.cjs
 
+      # ---------------------------------------------------------------
+      #  把 Java 编译成 jar。
+      #
+      #  【为什么必须编译】官方插件包格式规定 integrateType 只能取
+      #  aar 或 jar，含义是「原生导出的文件类型」——云打包只会引用
+      #  已编译产物，【不会】帮你编译 android/src 下的 .java 源码。
+      #  此前插件包里只有裸 .java，类根本没进 APK，于是
+      #  requireNativePlugin('XiangqiEngine') 恒为 null，
+      #  App 一直提示「原生插件未加载」。iOS 侧因为给的是编译好的
+      #  framework 所以正常，两端差异正是由此而来。
+      #
+      #  【桩类绝不能进 jar】桩类只是为了满足编译期符号（真实实现由
+      #  DCloud 的 uniapp-v8-release.aar 在运行时提供）。若把
+      #  io/dcloud、com/alibaba、android/ 这些桩类打进 jar，运行时会
+      #  与真实类冲突甚至覆盖，故障比现在更隐蔽。所以编译时用桩类，
+      #  打包时只取 com/xiangqi，并在下面做硬断言。
+      # ---------------------------------------------------------------
+      - name: 编译 Java 为 jar
+        run: |
+          set -e
+          mkdir -p jarbuild/classes
+
+          find native/android/stubs native/android/java -name '*.java' > sources.txt
+          echo "参与编译的源文件："
+          sed 's/^/    /' sources.txt
+
+          # --release 8：与云打包 JDK 1.8 字节码版本保持一致
+          javac --release 8 -encoding UTF-8 -nowarn -d jarbuild/classes @sources.txt
+
+          # 只打包自己的类，桩类留在 classes 目录里不带走
+          (cd jarbuild/classes && jar cf ../xiangqi-engine.jar com/xiangqi)
+
+          echo ""
+          echo "=== jar 内容 ==="
+          jar tf jarbuild/xiangqi-engine.jar
+
+          echo ""
+          echo "=== 断言 ==="
+          FAIL=0
+
+          for cls in \
+            com/xiangqi/engine/XiangqiEngineModule.class \
+            com/xiangqi/engine/PikafishBridge.class
+          do
+            if jar tf jarbuild/xiangqi-engine.jar | grep -qx "$cls"; then
+              echo "  OK       含 $cls"
+            else
+              echo "  MISSING  缺 $cls"
+              FAIL=1
+            fi
+          done
+
+          # 桩类混入是严重问题，必须拦死
+          for bad in io/dcloud com/alibaba android/; do
+            if jar tf jarbuild/xiangqi-engine.jar | grep -q "^$bad"; then
+              echo "  BAD      jar 内混入桩类 $bad（会覆盖真实 SDK 类）"
+              FAIL=1
+            else
+              echo "  OK       无桩类 $bad"
+            fi
+          done
+
+          [ "$FAIL" -eq 0 ] || { echo '::error::jar 内容不符合预期'; exit 1; }
+          ls -lh jarbuild/xiangqi-engine.jar
+
       # 注意：不再把 NNUE 权重打进插件包。
       # 官方权重 2026-07 已涨到约 49MB，打进去后插件包约 102MB，
       # 远超 HBuilderX 云打包 40MB 免费额度；且官方会持续更新权重。
@@ -213,11 +278,14 @@ jobs:
           # 不是 uni-app 插件包的约定，云打包不会去那里找 .so。
           mkdir -p $P/android/libs/arm64-v8a
           mkdir -p $P/android/libs/x86_64
-          mkdir -p $P/android/src/main/java/com/xiangqi/engine
 
           cp downloaded/libpikafish-arm64-v8a/libpikafish.so $P/android/libs/arm64-v8a/
           cp downloaded/libpikafish-x86_64/libpikafish.so    $P/android/libs/x86_64/
-          cp native/android/java/com/xiangqi/engine/*.java    $P/android/src/main/java/com/xiangqi/engine/
+
+          # 【jar 而非 .java】云打包不编译源码，只引用 libs 下的 jar。
+          # 不再拷贝 src/main/java：那份源码从来没被云打包用到，
+          # 留着只会让人误以为它生效了（本次故障的根源就在这里）。
+          cp jarbuild/xiangqi-engine.jar                      $P/android/libs/
           cp app/nativeplugins/XiangqiEngine/package.json     $P/
 
           echo "=== 插件目录结构 ==="

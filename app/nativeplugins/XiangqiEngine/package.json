@@ -13,7 +13,7 @@
           "class": "com.xiangqi.engine.XiangqiEngineModule"
         }
       ],
-      "integrateType": "aar",
+      "integrateType": "jar",
       "abis": [
         "arm64-v8a",
         "x86_64"

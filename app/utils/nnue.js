@@ -12,11 +12,22 @@
  *   不关心引擎怎么用它 —— 那是 engine.js 的事。
  */
 
-// 官方权重下载地址。注意 master-net 是滚动 tag，官方更新后地址不变。
+// 官方权重下载地址。注意 master-net 是滚动 tag，官方更新后地址不变、内容会变。
 const NNUE_URL = 'https://github.com/official-pikafish/Networks/releases/download/master-net/pikafish.nnue'
 
-// 国内直连 GitHub 常失败，准备镜像作为备选。按顺序尝试。
+// 自建 CDN（腾讯云 COS，广州）。
+// 为什么放第一位：
+//   1. 国内直连 GitHub 经常「连得上但不给数据」，正是这个导致了
+//      UI 长时间卡在「引擎加载中」；实测 COS 下载速度 40 MB/s。
+//   2. master-net 是滚动 tag，官方一旦更新权重，用户拿到的文件就变了；
+//      COS 上是按日期固化的副本，版本可控，与下面的 sha256 一一对应。
+// 已核对：字节数与源站完全一致，sha256 一致，无 gzip 压缩。
+const NNUE_CDN = 'https://myassis-1251246038.cos.ap-guangzhou.myqcloud.com/myassis-1251246038/engines/pikafish-20260906.nnue'
+
+// 按顺序尝试。CDN 优先，但保留官方源与镜像做兜底，
+// 避免 COS 欠费 / 档档 / 被删时 App 直接残废。
 const NNUE_MIRRORS = [
+  NNUE_CDN,
   NNUE_URL,
   'https://ghfast.top/' + NNUE_URL,
   'https://gh-proxy.com/' + NNUE_URL
@@ -29,6 +40,14 @@ const LOCAL_NAME = 'pikafish.nnue'
 // 体积下限校验：低于此值一定是下载中断的碎片文件。
 // 不校验精确大小，因为官方会更新权重导致体积变化。
 const MIN_VALID_BYTES = 8 * 1024 * 1024
+
+// CDN 上那份固化副本的确切字节数（已核对：sha256
+// 3CD15292BF8C979884262F57FC723959FC0DEA43B4D8D544F88DB5CEB2479E24）。
+// 仅当从 CDN 下载时做精确比对：一些网络会返回运营商插入页、
+// 或 CDN 配错压缩导致字节数对不上，这种文件体积可能远大于 8MB，
+// 光靠下限校验拦不住，拿去初始化引擎只会得到更难排查的失败。
+// 官方源不做此校验，因为它会随版本变化。
+const CDN_EXACT_BYTES = 51585654
 
 const STORAGE_KEY = 'nnue_local_path'
 
@@ -142,6 +161,7 @@ export function downloadNnue(onProgress) {
 
       const url = NNUE_MIRRORS[mirrorIndex]
       const isFirst = mirrorIndex === 0
+      const isCdn = url === NNUE_CDN
       mirrorIndex++
 
       const task = plus.downloader.createDownload(
@@ -163,6 +183,14 @@ export function downloadNnue(onProgress) {
                   async file => {
                     if (file.size < MIN_VALID_BYTES) {
                       // 拿到的可能是镜像站返回的错误页面，换下一个源
+                      entry.remove(() => {}, () => {})
+                      tryOne()
+                      return
+                    }
+                    // CDN 上是固化副本，字节数必须一模一样。对不上说明
+                    // 中途被改过（运营商插入、CDN 压缩、传输截断），
+                    // 这种文件拿去初始化引擎只会得到更难排查的失败。
+                    if (isCdn && file.size !== CDN_EXACT_BYTES) {
                       entry.remove(() => {}, () => {})
                       tryOne()
                       return

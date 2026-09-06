@@ -73,7 +73,7 @@ function Test-Plugin {
     # 2) Android required files.
     #    pikafish.nnue is deliberately NOT required here. The official weights
     #    grew to ~49MB in 2026-07; bundling them would push the plugin to
-    #    ~102MB, far past the 40MB free cloud-build quota. The app now
+    #    ~102MB if double-counted, but each platform ships only its own
     #    downloads the weights on first launch (see app/utils/nnue.js).
     #    Cloud build only consumes compiled artifacts (integrateType=jar).
     #    It does NOT compile .java under android/src -- checking for those
@@ -118,15 +118,30 @@ function Test-Plugin {
         Say-Warn 'ios/XiangqiEngine.framework not installed (only needed for iOS builds)'
     }
 
-    # 4) size vs the 40MB free quota of the cloud build service
-    $bytes = (Get-ChildItem $PLUGIN -Recurse -File | Measure-Object Length -Sum).Sum
-    $mb    = [math]::Round($bytes / 1MB, 2)
+    # 4) size check, PER PLATFORM, against the 100MB uniCloud quota.
+    #    An Android package ships only android/, an iOS package only ios/.
+    #    The 49MB NNUE weights live in BOTH folders, so summing the whole
+    #    plugin dir double-counts them and reports a bogus ~103MB overrun.
+    #    (The old 40MB number was also stale: uniCloud allows 100MB, which
+    #     is exactly why the weights were moved into the package.)
+    $LIMIT_MB = 100
+    $aDir = Join-Path $PLUGIN 'android'
+    $iDir = Join-Path $PLUGIN 'ios'
+    $aMb = 0; $iMb = 0
+    if (Test-Path $aDir) {
+        $aMb = [math]::Round(((Get-ChildItem $aDir -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 2)
+    }
+    if (Test-Path $iDir) {
+        $iMb = [math]::Round(((Get-ChildItem $iDir -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 2)
+    }
     Write-Host ""
-    Say-Info "total size: $mb MB"
-    if ($mb -gt 40) {
-        Say-Bad "exceeds the 40MB free cloud-build quota"
+    Say-Info "android package: $aMb MB"
+    Say-Info "ios package    : $iMb MB"
+    $worst = [math]::Max($aMb, $iMb)
+    if ($worst -gt $LIMIT_MB) {
+        Say-Bad "a single-platform package exceeds the ${LIMIT_MB}MB quota"
     } else {
-        Say-Ok "within the 40MB free quota"
+        Say-Ok "both platforms within the ${LIMIT_MB}MB quota"
     }
 
     # x86_64 is a simulator/emulator lib; drop it for release builds

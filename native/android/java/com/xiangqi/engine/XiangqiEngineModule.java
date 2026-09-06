@@ -104,15 +104,23 @@ public class XiangqiEngineModule extends UniModule {
             // 3) 启动输出读取线程
             startReaderThread();
 
-            // 4) UCI 握手 + 指定权重文件
-            PikafishBridge.nativeSend("uci");
-            PikafishBridge.nativeSend("setoption name EvalFile value " + nnue.getAbsolutePath());
-            PikafishBridge.nativeSend("isready");
-
+            // 4) 先把初始化结果回给 JS，再发 UCI 命令。
+            //
+            //    顺序不能反。原先是先发 uci 再 invoke(callback)，而引擎收到
+            //    uci 会立刻回吐上百行 "option name ..."，读取线程随即从一个
+            //    裸 Java 线程高频调用 invokeAndKeepAlive 冲击 JS 桥；这股洪流
+            //    会把后面这个尚未投递的 init 回调挤掉，JS 侧于是永远等不到
+            //    initEngine 的结果，界面一直停在「引擎加载中：启动引擎」，
+            //    最终只能等超时。先回调就不存在这个竞争。
             res.put("success", true);
             res.put("nnuePath", nnue.getAbsolutePath());
             res.put("nnueSize", nnue.length());
             invoke(callback, res);
+
+            // 5) UCI 握手 + 指定权重文件（此时回调已安全送达）
+            PikafishBridge.nativeSend("uci");
+            PikafishBridge.nativeSend("setoption name EvalFile value " + nnue.getAbsolutePath());
+            PikafishBridge.nativeSend("isready");
 
         } catch (Exception e) {
             res.put("success", false);
@@ -217,10 +225,23 @@ public class XiangqiEngineModule extends UniModule {
         mReaderThread.start();
     }
 
+    /**
+     * 引擎启动时会一次性回吐上百行 "option name ..."，这些是 UCI 能力
+     * 声明，JS 侧完全用不到。若逐行跨桥推送，会在初始化瞬间制造一波
+     * 回调洪流，既拖慢启动，也容易把同期其它回调挤掉。直接在 Java 侧
+     * 拦掉，只放行真正有用的输出。
+     */
+    private static boolean isNoiseLine(String line) {
+        return line.startsWith("option name")
+            || line.startsWith("id name")
+            || line.startsWith("id author")
+            || line.startsWith("Pikafish ");
+    }
+
     /** 分发引擎输出：bestmove 单独回调，其余走 output 流 */
     private void dispatchLine(String line) {
         // 1) 推给通用输出监听（info/score 等）
-        if (mOutputCallback != null) {
+        if (mOutputCallback != null && !isNoiseLine(line)) {
             JSONObject o = new JSONObject();
             o.put("type", "output");
             o.put("line", line);

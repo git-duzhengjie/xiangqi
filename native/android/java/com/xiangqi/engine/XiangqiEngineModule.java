@@ -436,9 +436,64 @@ public class XiangqiEngineModule extends UniModule {
     // ------------------------------------------------------------
     //  工具方法
     // ------------------------------------------------------------
+    /**
+     * 获取 ApplicationContext。
+     *
+     * 不要写成 mUniSDKInstance.getContext()：该字段在部分 DCloud SDK 版本的
+     * UniModule 基类上并不存在，直接引用能编过（本地桩类里有），真机运行却抛
+     *   java.lang.NoSuchFieldError: No instance field mUniSDKInstance
+     *     of type Lio/dcloud/feature/uniapp/UniSDKInstance;
+     * initEngine 一进来就炸，JS 侧只看到"启动引擎超时"，极难定位。
+     *
+     * 因此改为三级兜底，全部走反射，不在编译期绑定任何字段：
+     *   1) 反射取 mUniSDKInstance / mWXSDKInstance（不同版本命名不同）
+     *   2) 反射调用其 getContext()
+     *   3) 都拿不到就用 ActivityThread.currentApplication()，这是 Android
+     *      自带的进程级入口，任何情况下都可用
+     */
     private Context getAppContext() {
-        if (mUniSDKInstance != null && mUniSDKInstance.getContext() != null) {
-            return mUniSDKInstance.getContext().getApplicationContext();
+        // 1) 尝试从基类字段拿 SDK 实例（字段名各版本不一，逐个试）
+        String[] fieldNames = new String[] { "mUniSDKInstance", "mWXSDKInstance" };
+        for (String fname : fieldNames) {
+            Object inst = readFieldUpwards(this, fname);
+            if (inst == null) continue;
+            try {
+                java.lang.reflect.Method m = inst.getClass().getMethod("getContext");
+                Object c = m.invoke(inst);
+                if (c instanceof Context) {
+                    return ((Context) c).getApplicationContext();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        // 2) 兜底：进程级 Application
+        try {
+            Class<?> at = Class.forName("android.app.ActivityThread");
+            java.lang.reflect.Method m = at.getMethod("currentApplication");
+            Object app = m.invoke(null);
+            if (app instanceof Context) {
+                return (Context) app;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        return null;
+    }
+
+    /** 沿继承链逐层查找字段并读值，找不到返回 null（绝不抛异常） */
+    private static Object readFieldUpwards(Object target, String name) {
+        Class<?> c = target.getClass();
+        while (c != null && c != Object.class) {
+            try {
+                java.lang.reflect.Field f = c.getDeclaredField(name);
+                f.setAccessible(true);
+                return f.get(target);
+            } catch (NoSuchFieldException e) {
+                c = c.getSuperclass();
+            } catch (Throwable e) {
+                return null;
+            }
         }
         return null;
     }

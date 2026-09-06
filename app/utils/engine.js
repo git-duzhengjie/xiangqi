@@ -44,13 +44,13 @@ class XiangqiEngine {
   /**
    * 初始化引擎
    *
-   * 权重获取策略（官方权重已涨至约 49MB，打进包会超云打包免费额度）：
-   *   1. 已下载过 -> 直接用本地文件
-   *   2. 未下载且 autoDownload 为 true -> 先下载再初始化
-   *   3. 未下载且不允许自动下载 -> 返回 needDownload，由 UI 决定何时下载
+   * 权重（约 49MB）已随包内置，安装即到位：
+   *   Android -> 插件 android/assets，运行时由原生层释放
+   *   iOS     -> 插件 ios/BundleResources，直接从主 bundle 读取
+   * 因此这里不再有任何下载逻辑，也无需联网。
    *
-   * @param {{autoDownload?:boolean, onProgress?:(p:number)=>void}} opts
-   * @returns {Promise<{success:boolean, error?:string, needDownload?:boolean}>}
+   * @param {{onStage?:(s:string)=>void}} opts
+   * @returns {Promise<{success:boolean, error?:string, timeout?:boolean, stage?:string}>}
    */
   init(opts = {}) {
     return new Promise(async resolve => {

@@ -17,7 +17,6 @@ import {
   applyMoveToBoard, isKingInCheck, isCheckmate, judgeResult, moveToChinese
 } from '@/utils/rules.js'
 import engine from '@/utils/engine.js'
-import { getLocalNnue, NNUE_INFO } from '@/utils/nnue.js'
 
 export default {
   data() {
@@ -121,36 +120,13 @@ export default {
         setTimeout(() => { this.engineMsg = '' }, 4000)
         return
       }
-      // 引擎权重约 49MB，未下载时先征得同意，不静默跑流量
-      const cachedNnue = await getLocalNnue()
-      if (!cachedNnue) {
-        const agreed = await new Promise(resolve => {
-          uni.showModal({
-            title: '首次使用需下载引擎数据',
-            content: 'AI 引擎需要约 ' + NNUE_INFO.approxMB + 'MB 神经网络数据，仅首次下载，建议在 Wi-Fi 下进行。',
-            confirmText: '立即下载',
-            cancelText: '稍后',
-            success: r => resolve(!!r.confirm),
-            fail: () => resolve(false)
-          })
-        })
-        if (!agreed) {
-          this.engineMsg = '未下载引擎数据，AI 暂不可用'
-          setTimeout(() => { this.engineMsg = '' }, 4000)
-          return
-        }
-      }
-
+      // 权重已随包内置，无需征询下载、也不跑流量，直接启动即可。
       this.engineMsg = '引擎加载中…'
       const res = await engine.init({
-        autoDownload: true,
         // 阶段回调：一直停在「引擎加载中…」时看不出卡在哪一步，
         // 把当前步骤显示出来，用户截个图就能定位
         onStage: (s) => {
           this.engineMsg = '引擎加载中：' + s
-        },
-        onProgress: (percent) => {
-          this.engineMsg = `下载引擎数据 ${percent}%`
         }
       })
       if (res.success) {

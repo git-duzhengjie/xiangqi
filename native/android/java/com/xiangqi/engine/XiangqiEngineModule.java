@@ -1,6 +1,8 @@
 package com.xiangqi.engine;
 
 import android.content.Context;
+import android.os.Looper;
+import android.os.Handler;
 
 import com.alibaba.fastjson.JSONObject;
 
@@ -36,6 +38,8 @@ public class XiangqiEngineModule extends UniModule {
 
     private static final String NNUE_NAME = "pikafish.nnue";
 
+    /** 主线程 Handler：所有 JS 回调都必须经它投递 */
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private final AtomicBoolean mInited = new AtomicBoolean(false);
     private final AtomicBoolean mReaderRunning = new AtomicBoolean(false);
 
@@ -293,7 +297,7 @@ public class XiangqiEngineModule extends UniModule {
             JSONObject o = new JSONObject();
             o.put("type", "output");
             o.put("line", line);
-            mOutputCallback.invokeAndKeepAlive(o);
+            invokeKeepAlive(mOutputCallback, o);
         }
 
         // 2) bestmove 触发一次性回调
@@ -311,7 +315,7 @@ public class XiangqiEngineModule extends UniModule {
                 o.put("success", !best.isEmpty() && !"(none)".equals(best));
                 o.put("bestmove", best);
                 if (ponder != null) o.put("ponder", ponder);
-                cb.invoke(o);
+                invoke(cb, o);
             }
         }
     }
@@ -439,7 +443,40 @@ public class XiangqiEngineModule extends UniModule {
         return null;
     }
 
+    /**
+     * 统一在主线程投递回调。
+     *
+     * uni-app 的 UniJSCallback 必须在主线程调用：从裸 Java 线程直接调用
+     * 会被静默丢弃——不抛异常、不打日志，JS 侧就是永远收不到，最终表现
+     * 为「引擎启动超时」，极难定位。
+     *
+     * 初始化已挪到后台线程执行，读取线程本身也是后台线程，因此这里必须
+     * 统一切回主线程，不能想当然地直接 cb.invoke()。
+     */
     private void invoke(UniJSCallback cb, JSONObject data) {
-        if (cb != null) cb.invoke(data);
+        if (cb == null) return;
+        postToMain(cb, data, false);
+    }
+
+    /** 需要多次回调（引擎输出流）时用这个，保持回调存活 */
+    private void invokeKeepAlive(UniJSCallback cb, JSONObject data) {
+        if (cb == null) return;
+        postToMain(cb, data, true);
+    }
+
+    private void postToMain(final UniJSCallback cb, final JSONObject data, final boolean keepAlive) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            if (keepAlive) cb.invokeAndKeepAlive(data); else cb.invoke(data);
+            return;
+        }
+        MAIN.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (keepAlive) cb.invokeAndKeepAlive(data); else cb.invoke(data);
+                } catch (Throwable ignored) {
+                }
+            }
+        });
     }
 }

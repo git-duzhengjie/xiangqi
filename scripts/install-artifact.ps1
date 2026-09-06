@@ -168,6 +168,18 @@ function Install-Android ($tmp) {
         Say-Info 'existing ios/ folder preserved'
     }
 
+    # keep android/assets too: the NNUE weights (49MB) live there and are NOT
+    # part of the CI zip -- they are committed once by hand. Without this the
+    # wipe below would silently delete them and the app would ship with no
+    # engine weights at all.
+    $assetsBak = $null
+    $assetsDir = Join-Path $PLUGIN 'android\assets'
+    if (Test-Path $assetsDir) {
+        $assetsBak = Join-Path $env:TEMP ("assets-keep-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+        Copy-Item $assetsDir $assetsBak -Recurse -Force
+        Say-Info 'existing android/assets preserved (NNUE weights)'
+    }
+
     if (Test-Path $PLUGIN) { Remove-Item $PLUGIN -Recurse -Force }
     New-Item -ItemType Directory -Path $PLUGIN -Force | Out-Null
     Copy-Item (Join-Path $src '*') $PLUGIN -Recurse -Force
@@ -177,6 +189,13 @@ function Install-Android ($tmp) {
         Copy-Item $iosBak (Join-Path $PLUGIN 'ios') -Recurse -Force
         Remove-Item $iosBak -Recurse -Force
         Say-Ok 'ios/ folder restored'
+    }
+    if ($assetsBak) {
+        $newAssets = Join-Path $PLUGIN 'android\assets'
+        if (Test-Path $newAssets) { Remove-Item $newAssets -Recurse -Force }
+        Copy-Item $assetsBak $newAssets -Recurse -Force
+        Remove-Item $assetsBak -Recurse -Force
+        Say-Ok 'android/assets restored (NNUE weights)'
     }
     Say-Ok 'Android artifact installed'
 }

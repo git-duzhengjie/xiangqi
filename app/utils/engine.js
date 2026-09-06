@@ -14,7 +14,7 @@
  */
 
 import { DIFFICULTY_LEVELS } from './constants.js'
-import { ensureNnue } from './nnue.js'
+// 权重已内置进 APK，不再运行时下载；nnue.js 仅保留给可能的手动更新场景。
 
 const PLUGIN_NAME = 'XiangqiEngine'
 
@@ -97,29 +97,15 @@ class XiangqiEngine {
         return
       }
 
-      // ---- 准备权重 ----
-      // 必须使用 ensureNnue：它统一把路径转成原生可用的绝对路径。
-      // 曾经的 bug：缓存分支直接用 getLocalNnue() 的返回值，那是
-      // _downloads/... 这种 uni-app 逻辑路径，原生标准 C 文件 IO 不认识，
-      // 导致「首次下载能用、杀掉 App 重进就报 nnue 不可用」。
-      let nnuePath = ''
-      try {
-        stage('准备权重')
-        const r = await ensureNnue(opts.autoDownload ? opts.onProgress : null)
-        if (done) return          // 已超时退出，别再往下走
-        if (r && r.success) {
-          nnuePath = r.path
-        } else if (opts.autoDownload) {
-          // 允许下载却仍失败，说明确实拿不到权重
-          finish({ success: false, needDownload: true, error: r && r.error })
-          return
-        }
-        // 不允许自动下载时 nnuePath 保持为空：
-        // 插件可能内置权重（开发阶段），交由原生层回退判定。
-      } catch (e) {
-        // 权重准备失败不应阻止尝试初始化，仍给原生层一次机会
-        nnuePath = ''
-      }
+      // ---- 权重 ----
+      // 权重（49MB）已随 APK 内置在插件的 android/assets 目录，安装即到位，
+      // 不再运行时下载。这里传空字符串，原生层会走 assets 释放分支。
+      //
+      // 为什么放弃运行时下载：整包仍远低于 uniCloud 100MB 免费额度，而下载
+      // 方案要额外承担「首次启动等 49MB」「弱网卡住」「CDN 欠费失效」
+      // 「下到一半的坏文件」这一整类问题，且每一个都发生在用户面前。
+      // 内置后这些故障模式直接不存在，首次启动也无需联网。
+      const nnuePath = ''
 
       // 注册输出监听：收集 MultiPV 候选 + 透传 info
       p.onOutput(res => {

@@ -100,9 +100,16 @@ class SoundService {
         ctx.src = BASE + file
         // 音效不能循环，也不该抢占背景音乐焦点
         ctx.loop = false
-        ctx.obeyMuteSwitch = true    // 跟随系统静音键（iOS 上很重要）
+        // 必须为 false。原先写 true（“跟随系统静音键”听着很合理），结果模拟器上完全无声。
+        // 许多 Android 模拟器（MuMu / 雷电等）默认处于静音开关打开的状态，部分真机的
+        // 勿扰模式也会命中；一旦命中，音效被系统静默地吞掉 —— 不报错、不回调、
+        // 日志干净，表现就是“开关看得见、声音听不到”，排查成本极高。
+        // 棋类游戏的落子声属于核心反馈而非背景音乐，用户想静音会直接用我们自己的
+        // 🔊 开关，没必要再受系统静音键限制。
+        ctx.obeyMuteSwitch = false
+        ctx.volume = 1.0
         ctx.onError((err) => {
-          console.warn('[sound] 播放出错 ' + key + ':', err)
+          console.warn('[sound] 播放出错 ' + key + ':', JSON.stringify(err))
         })
         arr.push(ctx)
       } catch (e) {
@@ -139,6 +146,9 @@ class SoundService {
       try { ctx.stop() } catch (e) {}
       try { ctx.seek(0) } catch (e) {}
       ctx.play()
+      // 留一条痕迹：无声问题最难的是分不清“没调用”还是“调了没响”，
+      // 有了这行日志，adb logcat 一搜就能区分两者
+      console.log('[sound] play ' + key)
     } catch (e) {
       console.warn('[sound] play 异常 ' + key + ':', e)
     }

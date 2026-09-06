@@ -75,12 +75,28 @@ public class XiangqiEngineModule extends UniModule {
             return;
         }
 
+        // 首次启动要把 49MB 权重从 assets 释放到 filesDir，这在中低端机和
+        // 模拟器上可能耗时十几秒。放在主线程会直接卡死 UI，表现就是界面
+        // 一动不动、最后报「引擎启动超时」——看起来像引擎坏了，其实只是
+        // 在拷文件。所以整个初始化都挪到后台线程，主线程立刻返回。
+        final Context fctx = ctx;
+        final JSONObject fopts = options;
+        final UniJSCallback fcb = callback;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                doInit(fctx, fopts, fcb);
+            }
+        }, "xq-engine-init").start();
+    }
+
+    /** 真正的初始化流程，运行在后台线程 */
+    private void doInit(Context ctx, JSONObject options, UniJSCallback callback) {
+        JSONObject res = new JSONObject();
         try {
             // 1) 解析权重文件路径
-            //    优先用 JS 层传入的外部路径（运行时下载到本地的权重），
-            //    没传或文件无效时回退到 assets 内置权重。
-            //    这样做是因为官方权重在 2026-07 已涨到约 49MB，内置会超出
-            //    HBuilderX 云打包 40MB 免费额度，故改为首次启动下载。
+            //    优先用 JS 层传入的外部路径，没传或文件无效时回退到 assets
+            //    内置权重（当前发版形态：权重随包内置，JS 传空字符串）。
             File nnue = resolveNnue(ctx, options);
             if (nnue == null) {
                 res.put("success", false);
@@ -178,28 +194,60 @@ public class XiangqiEngineModule extends UniModule {
     private File extractNnue(Context ctx) throws IOException {
         File out = new File(ctx.getFilesDir(), NNUE_NAME);
 
+        // 读完整个流来统计真实字节数，不要用 InputStream.available()。
+        // available() 返回的是"当前可无阻塞读取的字节数"，对 49MB 这种大
+        // 文件通常只给一个缓冲区的量；拿它和已释放文件比对，会让每次启动
+        // 都判定为"大小不符"而重新释放 49MB，白白多花十几秒。
+        //
+        // 也不用 openFd()：assets 里被压缩存储的文件拿不到 fd，会直接抛
+        // FileNotFoundException，而 .nnue 是否被压缩取决于打包工具配置，
+        // 不受我们控制。流式统计对两种情况都成立。
         long assetSize = -1;
         try {
             InputStream probe = ctx.getAssets().open(NNUE_NAME);
-            assetSize = probe.available();
+            long total = 0;
+            byte[] skip = new byte[64 * 1024];
+            int k;
+            while ((k = probe.read(skip)) > 0) total += k;
             probe.close();
+            assetSize = total;
         } catch (IOException ignored) {
         }
 
         if (out.exists() && assetSize > 0 && out.length() == assetSize) {
-            return out; // 已释放过
+            return out; // 已释放过，直接复用
         }
 
+        // 先写临时文件再改名：中途被杀进程时不会留下一个大小不对的
+        // pikafish.nnue，否则下次启动会拿这个半截文件去初始化引擎，
+        // 失败原因还很难查。
+        File tmp = new File(ctx.getFilesDir(), NNUE_NAME + ".tmp");
         InputStream in = ctx.getAssets().open(NNUE_NAME);
-        OutputStream os = new FileOutputStream(out);
+        OutputStream os = new FileOutputStream(tmp);
         byte[] buf = new byte[64 * 1024];
         int n;
-        while ((n = in.read(buf)) > 0) {
-            os.write(buf, 0, n);
+        long written = 0;
+        try {
+            while ((n = in.read(buf)) > 0) {
+                os.write(buf, 0, n);
+                written += n;
+            }
+            os.flush();
+        } finally {
+            try { os.close(); } catch (IOException ignored) {}
+            try { in.close(); } catch (IOException ignored) {}
         }
-        os.flush();
-        os.close();
-        in.close();
+
+        if (assetSize > 0 && written != assetSize) {
+            tmp.delete();
+            throw new IOException("nnue extract incomplete: " + written + "/" + assetSize);
+        }
+
+        if (out.exists()) out.delete();
+        if (!tmp.renameTo(out)) {
+            tmp.delete();
+            throw new IOException("nnue rename failed");
+        }
         return out;
     }
 

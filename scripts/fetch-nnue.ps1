@@ -1,5 +1,5 @@
 # =============================================================
-#  fetch-nnue.ps1 -- 把 NNUE 权重放进插件的 android/assets
+#  fetch-nnue.ps1 -- 把 NNUE 权重放进插件（Android + iOS 双端）
 #
 #  为什么需要这个脚本：
 #    权重 49MB，被 .gitignore 排除在仓库之外（避免仓库体积失控），
@@ -20,7 +20,16 @@ $EXPECT_HASH = '3CD15292BF8C979884262F57FC723959FC0DEA43B4D8D544F88DB5CEB2479E24
 $CDN = 'https://myassis-1251246038.cos.ap-guangzhou.myqcloud.com/myassis-1251246038/engines/pikafish-20260906.nnue'
 
 $root = Split-Path $PSScriptRoot -Parent
-$dest = Join-Path $root 'app\nativeplugins\XiangqiEngine\android\assets\pikafish.nnue'
+
+# 两端各自的落点：
+#   Android -> android/assets       ，云端打包写入 apk 的 assets 目录
+#   iOS     -> ios/BundleResources  ，HBuilderX 3.2.0+ 官方方式，目录内文件
+#                                     会被打进主 bundle，无需在 package.json
+#                                     里配置 resources 字段
+$targets = @(
+    (Join-Path $root 'app\nativeplugins\XiangqiEngine\android\assets\pikafish.nnue'),
+    (Join-Path $root 'app\nativeplugins\XiangqiEngine\ios\BundleResources\pikafish.nnue')
+)
 
 function Test-Nnue ($p) {
     if (-not (Test-Path $p)) { return $false }
@@ -29,40 +38,60 @@ function Test-Nnue ($p) {
 }
 
 Write-Host ''
-Write-Host 'NNUE weights -> plugin assets' -ForegroundColor Cyan
+Write-Host 'NNUE weights -> plugin (Android + iOS)' -ForegroundColor Cyan
 Write-Host '=============================================='
 
-if (Test-Nnue $dest) {
-    Write-Host '  [OK]   already in place and verified' -ForegroundColor Green
-    Write-Host ''
-    exit 0
+# 先准备一份可信的源文件，再分发到各平台目录，
+# 这样即使两端都缺，也只需要下载一次。
+$source = $null
+
+foreach ($t in $targets) {
+    if (Test-Nnue $t) { $source = $t; break }
 }
 
-New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
-
-# 1) 先找本机已有的副本，省一次 49MB 下载
-$local = @(
-    (Join-Path $env:USERPROFILE 'Downloads\pikafish.nnue')
-) | Where-Object { Test-Path $_ } | Where-Object {
-    (Get-Item $_).Length -eq $EXPECT_SIZE
-} | Select-Object -First 1
-
-if ($local) {
-    Write-Host "  [..]   copying from $local"
-    Copy-Item $local $dest -Force
-} else {
-    Write-Host "  [..]   downloading from CDN"
-    Invoke-WebRequest -Uri $CDN -OutFile $dest -TimeoutSec 900
+if (-not $source) {
+    # 本机其它位置的副本，省一次 49MB 下载
+    $source = @(
+        (Join-Path $env:USERPROFILE 'Downloads\pikafish.nnue')
+    ) | Where-Object { Test-Path $_ } |
+        Where-Object { (Get-Item $_).Length -eq $EXPECT_SIZE } |
+        Select-Object -First 1
+    if ($source) { Write-Host "  [..]   using local copy: $source" }
 }
 
-# 2) 必须校验：宁可这里失败，也不要让坏文件混进安装包
-if (Test-Nnue $dest) {
-    Write-Host ('  [OK]   verified: ' + (Get-Item $dest).Length + ' bytes') -ForegroundColor Green
-    Write-Host ''
-    exit 0
-} else {
-    Write-Host '  [FAIL] size or hash mismatch -- file removed' -ForegroundColor Red
-    Remove-Item $dest -Force -ErrorAction SilentlyContinue
-    Write-Host ''
-    exit 1
+if (-not $source) {
+    Write-Host '  [..]   downloading from CDN (49MB, once)'
+    $tmp = Join-Path $env:TEMP ('nnue-' + [guid]::NewGuid().ToString('N').Substring(0,8) + '.bin')
+    Invoke-WebRequest -Uri $CDN -OutFile $tmp -TimeoutSec 900
+    if (-not (Test-Nnue $tmp)) {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host '  [FAIL] downloaded file failed verification' -ForegroundColor Red
+        Write-Host ''
+        exit 1
+    }
+    $source = $tmp
 }
+
+$fail = 0
+foreach ($t in $targets) {
+    $label = if ($t -like '*android*') { 'android/assets      ' } else { 'ios/BundleResources ' }
+    if (Test-Nnue $t) {
+        Write-Host "  [OK]   $label already verified" -ForegroundColor Green
+        continue
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path $t -Parent) | Out-Null
+    Copy-Item $source $t -Force
+    # 必须复查：宁可这里失败，也不要让坏文件混进安装包
+    if (Test-Nnue $t) {
+        Write-Host "  [OK]   $label installed" -ForegroundColor Green
+    } else {
+        Write-Host "  [FAIL] $label size or hash mismatch -- removed" -ForegroundColor Red
+        Remove-Item $t -Force -ErrorAction SilentlyContinue
+        $fail++
+    }
+}
+
+if ($source -like "$env:TEMP*") { Remove-Item $source -Force -ErrorAction SilentlyContinue }
+
+Write-Host ''
+exit $fail

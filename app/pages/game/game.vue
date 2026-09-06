@@ -4,6 +4,8 @@
     <view class="top-bar">
       <view class="btn-back" @click="goBack">‹ 返回</view>
       <view class="title">{{ difficultyName }}</view>
+      <!-- 声音开关：放顶栏常驻，下棋时随手可关，不用翻菜单 -->
+      <view class="btn-sound" @click="toggleSound">{{ soundOn ? '🔊' : '🔇' }}</view>
       <view class="btn-menu" @click="showMenu = !showMenu">⋮</view>
     </view>
 
@@ -77,6 +79,7 @@
     <view v-if="showMenu" class="mask" @click="showMenu = false">
       <view class="menu" @click.stop>
         <view class="menu-item" @click="changeDifficulty">切换难度</view>
+        <view class="menu-item" @click="toggleSound">{{ soundOn ? '关闭音效' : '开启音效' }}</view>
         <view class="menu-item" @click="onRestart">重新开局</view>
         <view class="menu-item" @click="goBack">退出对局</view>
       </view>

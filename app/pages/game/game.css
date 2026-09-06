@@ -27,10 +27,20 @@
   font-size: 32rpx;
   padding: 8rpx 16rpx;
 }
+/* 声音开关：紧贴右侧菜单摆放。
+   顶栏是 space-between，直接多放一个子元素会把标题顶偏，
+   所以把它与菜单归入右侧一组，并给 title 加 flex:1 居中。 */
+.btn-sound {
+  color: #F5DEB3;
+  font-size: 30rpx;
+  padding: 8rpx 10rpx;
+}
 .title {
   color: #F5DEB3;
   font-size: 32rpx;
   font-weight: bold;
+  flex: 1;
+  text-align: center;
 }
 
 /* ---------- 主区（垂直居中）---------- */

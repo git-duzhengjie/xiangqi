@@ -17,6 +17,7 @@ import {
   applyMoveToBoard, isKingInCheck, isCheckmate, judgeResult, moveToChinese
 } from '@/utils/rules.js'
 import engine from '@/utils/engine.js'
+import sound from '@/utils/sound.js'
 
 export default {
   data() {
@@ -47,7 +48,8 @@ export default {
       showMoves: false,
       engineMsg: '',
       engineReady: false,
-      hintMove: null
+      hintMove: null,
+      soundOn: true
     }
   },
 
@@ -92,12 +94,17 @@ export default {
       this.difficultyId = parseInt(options.level, 10) || 3
     }
     this.initBoardSize()
+    // 预加载音效：不预载也能响，但首声会有延迟，落子手感会"慢半拍"
+    sound.preload()
+    this.soundOn = sound.isEnabled()
     this.resetGame()
     this.setupEngine()
   },
 
   onUnload() {
     engine.stop()
+    // innerAudioContext 是原生资源，不释放会泄漏
+    sound.destroy()
   },
 
   methods: {
@@ -394,6 +401,7 @@ export default {
     selectPiece(pos) {
       this.selected = pos
       this.legalTargets = genLegalMoves(this.board, pos.row, pos.col)
+      sound.playSelect()
       this.draw()
     },
 
@@ -404,6 +412,10 @@ export default {
       const chinese = moveToChinese(boardBefore, from, to)
       const uci = moveToUci(from, to)
 
+      // 落子音要在改动棋盘【之前】判断是否吃子：
+      // applyMoveToBoard 执行后目标格必然有子，那时已分不出是吃子还是平移
+      const isCapture = !!boardBefore[to.row * COLS + to.col]
+
       this.board = applyMoveToBoard(this.board, from, to)
       this.history.push({ side, uci, chinese, boardBefore, from, to })
       this.uciMoves.push(uci)
@@ -413,11 +425,18 @@ export default {
       this.currentSide = side === RED ? BLACK : RED
       this.draw()
 
+      sound.playMove(isCapture)
+
       // 裁决局面
       const res = judgeResult(this.board, this.currentSide)
       if (res !== GAME_RESULT.PLAYING) {
         this.endGame(res)
         return
+      }
+
+      // 将军提示音：错开落子声，否则两声叠在一起听不清
+      if (isKingInCheck(this.board, this.currentSide)) {
+        setTimeout(() => sound.playCheck(), 220)
       }
 
       // 轮到引擎
@@ -492,6 +511,8 @@ export default {
       this.gameOver = true
       this.thinking = false
       engine.stop()
+      // 稍延迟：让最后一步的落子声先放完，避免与结束音打架
+      setTimeout(() => sound.playResult(result), 300)
     },
 
     /* ============ 操作按钮 ============ */
@@ -523,6 +544,7 @@ export default {
       this.hintMove = null
       const h = this.history[this.history.length - 1]
       this.lastMove = h ? { from: h.from, to: h.to } : null
+      sound.playUndo()
       this.draw()
     },
 
@@ -539,6 +561,7 @@ export default {
       uni.hideLoading()
       if (res.success && res.bestmove) {
         this.hintMove = this.parseUci(res.bestmove)
+        sound.playHint()
         this.draw()
       } else {
         uni.showToast({ title: '无推荐着法', icon: 'none' })
@@ -547,6 +570,7 @@ export default {
 
     onRestart() {
       this.showMenu = false
+      sound.playClick()
       engine.stop()
       engine.newGame()
       this.resetGame()
@@ -567,7 +591,20 @@ export default {
       })
     },
 
+    /** 声音开关：状态持久化，下次进来保持 */
+    toggleSound() {
+      this.soundOn = sound.toggle()
+      // 开启时给一声反馈，让用户确认真的有声了
+      if (this.soundOn) sound.playClick()
+      uni.showToast({
+        title: this.soundOn ? '🔊 音效已开启' : '🔇 音效已关闭',
+        icon: 'none',
+        duration: 1200
+      })
+    },
+
     goBack() {
+      sound.playClick()
       engine.stop()
       uni.navigateBack()
     }

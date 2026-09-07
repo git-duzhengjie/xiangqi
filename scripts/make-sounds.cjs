@@ -178,12 +178,20 @@ let total = 0;
 const made = [];
 for (const [name, fn] of Object.entries(defs)) {
   let s = fn();
-  // 统一做一次峰值归一，避免个别音效过响或过轻
+  // 统一做一次峰值归一，让每个音效都达到目标响度。
+  //
+  // 之前这里写的是 if (peak > target)，只在超标时衰减，偏小的音频原样放行。
+  // 结果就是 win/lose/undo/hint 这些峰值只有 23%~30%，手机小喇叭上几乎听不见，
+  // 而上游调高增益也没用——因为压根没走到放大这一步。
+  // 现在改成无条件缩放到 target：过响的压下来，过轻的提上去。
   let peak = 0;
   for (const v of s) peak = Math.max(peak, Math.abs(v));
   if (peak > 0.001) {
     const target = 0.95;
-    if (peak > target) for (let i = 0; i < s.length; i++) s[i] *= target / peak;
+    const gain = target / peak;
+    for (let i = 0; i < s.length; i++) {
+      s[i] = Math.max(-1, Math.min(1, s[i] * gain));
+    }
   }
   // 收尾淡出，消除爆音
   const fade = Math.min(len(0.012), Math.floor(s.length * 0.2));

@@ -113,6 +113,7 @@ class SoundService {
     this.lastError = ''      // 最近一次错误，供页面上的自检按钮展示
     this.audioOptionApplied = false
     this.audioOptionOk = false
+    this.dirIsFallback = false   // 当前 this.dir 是不是 plus 不可用时的兜底路径
     this.loadSetting()
   }
 
@@ -201,10 +202,33 @@ class SoundService {
     // 创建任何实例前，先确保全局音频配置已生效
     this.applyAudioOption()
 
-    // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算
-    if (!this.dir) {
-      try { this.dir = resolveSoundDir() }
-      catch (e) { this.lastError = '目录解析失败: ' + errText(e); return null }
+    // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算。
+    // 注意：如果首次解析时 plus 不可用，会返回 fallback 路径（_www/static/...），
+    // 但这个路径在 Android 原生播放器里打不开，会报 MediaError。
+    // 所以这里同时记一个 dirIsFallback 标记，play() 时如果发现是 fallback，
+    // 会再试一次 plus 解析——只要 plus 后来就绪了，就能自动切到正确路径，
+    // 不必等用户手动开关一次。
+    if (!this.dir || this.dirIsFallback) {
+      try {
+        const newDir = resolveSoundDir()
+        const isFallback = newDir.indexOf('file://') !== 0 && newDir.indexOf('/data/') !== 0
+        if (newDir && !isFallback) {
+          // 解析到了真正的绝对路径，替换掉 fallback
+          this.dir = newDir
+          this.dirIsFallback = false
+          // 路径变了，旧池子用的是错路径，必须清掉重建
+          this.pools = {}
+          this.cursor = {}
+        } else if (!this.dir) {
+          // 第一次解析，且仍然是 fallback，先记着，后面再重试
+          this.dir = newDir
+          this.dirIsFallback = true
+        }
+        // else：已经有 fallback 了，这次 plus 还是没好，保持原样
+      } catch (e) {
+        this.lastError = '目录解析失败: ' + errText(e)
+        if (!this.dir) return null
+      }
     }
 
     const arr = []
@@ -356,6 +380,7 @@ class SoundService {
     try {
       if (!this.dir) this.dir = resolveSoundDir()
       L.push('目录: ' + this.dir)
+      L.push('路径状态: ' + (this.dirIsFallback ? 'fallback（plus 未就绪）' : '已就绪'))
     } catch (e) {
       L.push('目录解析失败: ' + errText(e))
       return this.showDiag(L)

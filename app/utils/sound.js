@@ -100,6 +100,8 @@ class SoundService {
     this.ready = false
     this.dir = ''            // 音频目录（延迟到首次使用时解析，plus 此时才就绪）
     this.lastError = ''      // 最近一次错误，供页面上的自检按钮展示
+    this.audioOptionApplied = false
+    this.audioOptionOk = false
     this.loadSetting()
   }
 
@@ -132,11 +134,46 @@ class SoundService {
    */
   preload() {
     if (this.ready) return
+    this.applyAudioOption()
     try {
       Object.keys(SOUND_FILES).forEach(key => this.ensurePool(key))
       this.ready = true
     } catch (e) {
+      this.lastError = 'preload: ' + errText(e)
       console.warn('[sound] preload 失败:', e)
+    }
+  }
+
+  /**
+   * 全局关闭"跟随系统静音开关"。
+   *
+   * 自检实测：ctx.obeyMuteSwitch 在本基座上只有 getter，赋值直接抛
+   * "Cannot set property obeyMuteSwitch ... which has only a getter"，
+   * 也就是说它一直保持默认值 true —— 跟随系统静音键。
+   * 而模拟器默认就处于静音开关打开的状态，真机的勿扰模式同样会命中，
+   * 结果就是音效被系统静默吞掉：不报错、不回调、日志干净，
+   * 表现正是"开关看得见、声音听不到"。
+   *
+   * 实例属性改不动，就改全局配置：uni.setInnerAudioOption 是官方提供的
+   * 全局入口，对之后创建的所有 innerAudioContext 生效，绕开只读限制。
+   * 必须在创建实例之前调用。
+   */
+  applyAudioOption() {
+    if (this.audioOptionApplied) return
+    this.audioOptionApplied = true
+    try {
+      if (uni.setInnerAudioOption) {
+        uni.setInnerAudioOption({
+          obeyMuteSwitch: false,   // 不跟随系统静音键
+          mixWithOther: true,      // 允许与其他音频共存，避免抢焦点失败导致无声
+          fail: (err) => { this.lastError = 'setInnerAudioOption: ' + errText(err) }
+        })
+        this.audioOptionOk = true
+      } else {
+        this.lastError = 'setInnerAudioOption 不可用'
+      }
+    } catch (e) {
+      this.lastError = 'setInnerAudioOption: ' + errText(e)
     }
   }
 
@@ -144,6 +181,9 @@ class SoundService {
     if (this.pools[key]) return this.pools[key]
     const file = SOUND_FILES[key]
     if (!file) return null
+
+    // 创建任何实例前，先确保全局音频配置已生效
+    this.applyAudioOption()
 
     // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算
     if (!this.dir) {
@@ -171,11 +211,9 @@ class SoundService {
       try { ctx.src = this.dir + file } catch (e) { this.lastError = 'src: ' + errText(e) }
       try { ctx.loop = false } catch (e) {}
       try { ctx.autoplay = false } catch (e) {}
-      // obeyMuteSwitch 必须为 false。写 true（"跟随系统静音键"）看着合理，
-      // 但很多 Android 模拟器默认就处于静音开关打开的状态，真机的勿扰模式也会
-      // 命中；一旦命中，音效被系统静默吞掉——不报错、不回调、日志干净，表现
-      // 就是"开关看得见、声音听不到"。落子声属于核心反馈而非背景音乐，用户想
-      // 静音会直接用我们自己的喇叭开关。
+      // 这里不再给 ctx.obeyMuteSwitch 赋值：自检已证实它在本基座上只有 getter，
+      // 赋值必然抛错。改由 applyAudioOption() 通过全局 API 统一设置。
+      // 保留 try 只是为了兼容个别允许写入的平台，失败也不影响后续。
       try { ctx.obeyMuteSwitch = false } catch (e) {}
       try { ctx.volume = 1.0 } catch (e) {}
 
@@ -287,6 +325,10 @@ class SoundService {
     const L = []
     L.push('开关: ' + (this.enabled ? '开' : '关'))
 
+    // 0) 全局音频配置（必须在创建实例前生效）
+    this.applyAudioOption()
+    L.push('全局静音跟随: ' + (this.audioOptionOk ? '已关闭' : '设置失败'))
+
     // 1) plus 是否就绪
     try {
       L.push('plus: ' + (typeof plus !== 'undefined' ? '就绪' : '不可用'))
@@ -322,7 +364,17 @@ class SoundService {
     try { probe.volume = 1.0; L.push('volume 赋值: 成功') }
     catch (e) { L.push('volume 赋值失败: ' + errText(e)) }
 
-    // 5) 直接用这个探针播放，绕开实例池，判断问题在池还是在播放本身
+    // 5) 用探针实测一次播放，并挂上全部回调。
+    //    关键在于把"到底有没有真正播出去"变成可观测的事实：
+    //    onCanplay 说明解码成功，onPlay 说明播放器真的启动了，
+    //    onEnded 说明完整播完。只看 duration 是不够的——刚创建的实例
+    //    尚未加载完成，duration 本来就是 0，据此判断会误伤。
+    const marks = []
+    try { probe.onCanplay(() => marks.push('canplay')) } catch (e) {}
+    try { probe.onPlay(() => marks.push('play')) } catch (e) {}
+    try { probe.onEnded(() => marks.push('ended')) } catch (e) {}
+    try { probe.onError((err) => marks.push('error:' + (err && (err.errMsg || err.errCode || JSON.stringify(err))))) } catch (e) {}
+
     try { probe.play(); L.push('探针 play(): 已调用') }
     catch (e) { L.push('探针 play() 失败: ' + errText(e)) }
 
@@ -332,11 +384,17 @@ class SoundService {
       L.push('实例池: 创建失败')
     } else {
       L.push('实例池: ' + pool.length + ' 个')
-      L.push('时长: ' + (pool[0].duration || 0))
     }
     L.push('最近错误: ' + (this.lastError || '无'))
 
-    this.showDiag(L)
+    // 等 800ms 收集回调结果再弹窗，否则一切都还没发生，看到的必然是空的
+    setTimeout(() => {
+      L.push('')
+      L.push('回调: ' + (marks.length ? marks.join(' > ') : '无（未触发任何回调）'))
+      L.push('时长: ' + (probe.duration || 0))
+      try { probe.destroy() } catch (e) {}
+      this.showDiag(L)
+    }, 800)
   }
 
   showDiag(lines) {

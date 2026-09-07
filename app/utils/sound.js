@@ -142,8 +142,15 @@ class SoundService {
       this.cursor[key] = (idx + 1) % pool.length
       const ctx = pool[idx]
 
-      // 复用实例必须先回到起点，否则第二次播放没声音
-      try { ctx.stop() } catch (e) {}
+      // 关键：这里绝不能先 stop()。
+      //
+      // Android 底层是 MediaPlayer 状态机，stop() 会把它打到 Stopped 态，
+      // 必须重新 prepare() 才能再播；此时直接 play() 会被静默丢弃 ——
+      // 不报错、不回调，表现就是彻底没声。我之前为了“回到起点”加的
+      // stop()，恰恰把播放器打成了不可播状态。
+      //
+      // 正确做法：直接 seek(0) + play()。seek 在 Started/Paused/Prepared 态
+      // 都合法，既能重头播放，又不会破坏状态机。
       try { ctx.seek(0) } catch (e) {}
       ctx.play()
       // 留一条痕迹：无声问题最难的是分不清“没调用”还是“调了没响”，
@@ -191,11 +198,19 @@ class SoundService {
   }
 
   stopAll() {
+    // 注意：stop() 会使实例进入 Stopped 态、后续无法直接 play，
+    // 所以停完必须把池重建，否则重新开启音效后会发现“再也不响了”。
     try {
       Object.values(this.pools).forEach(pool => {
-        pool.forEach(ctx => { try { ctx.stop() } catch (e) {} })
+        pool.forEach(ctx => {
+          try { ctx.stop() } catch (e) {}
+          try { ctx.destroy() } catch (e) {}
+        })
       })
     } catch (e) {}
+    this.pools = {}
+    this.cursor = {}
+    this.ready = false
   }
 
   /**

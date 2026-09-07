@@ -79,8 +79,17 @@ function resolveSoundDir() {
   // #ifdef APP-PLUS
   try {
     if (typeof plus !== 'undefined' && plus.io && plus.io.convertLocalFileSystemURL) {
-      const abs = plus.io.convertLocalFileSystemURL('_www/static/sounds/')
-      if (abs) return abs.charAt(abs.length - 1) === '/' ? abs : abs + '/'
+      let abs = plus.io.convertLocalFileSystemURL('_www/static/sounds/')
+      if (abs) {
+        // 确保尾部斜杠
+        if (abs.charAt(abs.length - 1) !== '/') abs += '/'
+        // 确保 file:// 前缀。
+        // plus.io.convertLocalFileSystemURL 返回的是文件系统绝对路径 /data/...，
+        // 但 Android MediaPlayer 有时需要明确的 file:// 协议前缀才能识别为本地文件。
+        // 实测症状：adb 确认文件存在、路径正确、但播放器报 MediaError 无法打开。
+        if (abs.indexOf('file://') !== 0) abs = 'file://' + abs
+        return abs
+      }
     }
   } catch (e) {}
   return '_www/static/sounds/'
@@ -357,6 +366,9 @@ class SoundService {
     //    而不是静默忽略 —— 这类失败最容易被整块 try/catch 吞掉。
     try { probe.src = this.dir + SOUND_FILES.move; L.push('src 赋值: 成功') }
     catch (e) { L.push('src 赋值失败: ' + errText(e)) }
+    // 把实际 src 打出来。只显示"成功"是不够的——路径拼错时赋值一样会成功，
+    // 真正的问题要到播放阶段才暴露成 MediaError，那时已无从判断是哪一段拼错。
+    try { L.push('实际 src: ' + probe.src) } catch (e) {}
     try { probe.loop = false; L.push('loop 赋值: 成功') }
     catch (e) { L.push('loop 赋值失败: ' + errText(e)) }
     try { probe.obeyMuteSwitch = false; L.push('obeyMuteSwitch 赋值: 成功') }
@@ -387,14 +399,71 @@ class SoundService {
     }
     L.push('最近错误: ' + (this.lastError || '无'))
 
-    // 等 800ms 收集回调结果再弹窗，否则一切都还没发生，看到的必然是空的
+    // 等回调产生后再弹窗，否则一切都还没发生，看到的必然是空的。
+    // 同时并行探测所有候选路径写法，一次打包就能定位哪种可用。
     setTimeout(() => {
       L.push('')
       L.push('回调: ' + (marks.length ? marks.join(' > ') : '无（未触发任何回调）'))
       L.push('时长: ' + (probe.duration || 0))
       try { probe.destroy() } catch (e) {}
-      this.showDiag(L)
+
+      L.push('')
+      L.push('=== 路径写法实测 ===')
+      this.probeAllPaths((lines) => {
+        lines.forEach(x => L.push(x))
+        this.showDiag(L)
+      })
     }, 800)
+  }
+
+  /**
+   * 并行探测所有候选路径，找出哪一种写法能真正播放。
+   *
+   * 为什么要这么做：前几轮一直在"改一种写法 -> 打包 -> 验证 -> 失败"里空转，
+   * 每轮只能验证一个猜测，代价是一次完整打包。这里一次性把所有候选写法都
+   * 创建实例并监听 canplay/error，800ms 后把每种写法的真实结果列出来，
+   * 一次打包就能定论，不必再赌。
+   *
+   * 判定依据是 canplay 而非 duration：实例刚创建时音频尚未加载完成，
+   * duration 必然为 0，用它判断会误伤所有候选。
+   */
+  probeAllPaths(done) {
+    let base = ""
+    try {
+      if (typeof plus !== "undefined" && plus.io && plus.io.convertLocalFileSystemURL) {
+        base = plus.io.convertLocalFileSystemURL("_www/static/sounds/") || ""
+        if (base && base.charAt(base.length - 1) !== "/") base += "/"
+      }
+    } catch (e) {}
+    const bare = base.indexOf("file://") === 0 ? base.slice(7) : base
+
+    const cands = []
+    if (bare) {
+      cands.push(["绝对路径", bare + "move.wav"])
+      cands.push(["file://", "file://" + bare + "move.wav"])
+    }
+    cands.push(["_www/相对", "_www/static/sounds/move.wav"])
+    cands.push(["/static/", "/static/sounds/move.wav"])
+    cands.push(["static/", "static/sounds/move.wav"])
+
+    const results = []
+    const ctxs = []
+    cands.forEach(([name, url]) => {
+      const r = { name: name, state: "无响应" }
+      results.push(r)
+      let c = null
+      try { c = uni.createInnerAudioContext() } catch (e) { r.state = "创建失败"; return }
+      ctxs.push(c)
+      try { c.onCanplay(() => { if (r.state !== "可播放") r.state = "可播放" }) } catch (e) {}
+      try { c.onError((err) => { r.state = "失败:" + (err && (err.errMsg || err.errCode || "?")) }) } catch (e) {}
+      try { c.src = url } catch (e) { r.state = "src失败"; return }
+      try { c.play() } catch (e) {}
+    })
+
+    setTimeout(() => {
+      ctxs.forEach(c => { try { c.stop() } catch (e) {} ; try { c.destroy() } catch (e) {} })
+      done(results.map(r => "  " + r.name + ": " + r.state))
+    }, 1200)
   }
 
   showDiag(lines) {

@@ -11,7 +11,7 @@
         v-for="lv in levels"
         :key="lv.id"
         class="level-card"
-        :class="{ hard: lv.id >= 5 }"
+        :class="{ hard: lv.id >= 3 }"
         @click="startGame(lv.id)"
       >
         <view class="lc-left">
@@ -19,7 +19,7 @@
           <text class="lc-desc">{{ lv.desc }}</text>
         </view>
         <view class="lc-right">
-          <text class="lc-elo">≈{{ lv.elo >= 9999 ? '满级' : lv.elo }}</text>
+          <text class="lc-elo">≈{{ lv.elo }}</text>
           <text class="lc-go">›</text>
         </view>
       </view>

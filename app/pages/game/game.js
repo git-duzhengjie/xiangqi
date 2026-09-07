@@ -43,7 +43,7 @@ export default {
       thinking: false,
       gameOver: false,
       result: GAME_RESULT.PLAYING,
-      difficultyId: 3,
+      difficultyId: 2,
       showMenu: false,
       showMoves: false,
       engineMsg: '',
@@ -91,7 +91,7 @@ export default {
 
   onLoad(options) {
     if (options && options.level) {
-      this.difficultyId = parseInt(options.level, 10) || 3
+      this.difficultyId = parseInt(options.level, 10) || 2
     }
     this.initBoardSize()
     // 预加载音效：不预载也能响，但首声会有延迟，落子手感会"慢半拍"
@@ -592,17 +592,6 @@ export default {
     },
 
     /** 声音开关：状态持久化，下次进来保持 */
-    /**
-     * 长按顶栏喇叭触发音效自检。
-     *
-     * 正式包会剥离 console.log，adb 日志里看不到任何音效信息，
-     * 无声时只能靠猜，而每验证一次都要重新打包。把路径、实例数、
-     * 音频时长、最近错误直接弹到屏幕上，一眼就能定位到具体环节。
-     */
-    diagnoseSound() {
-      sound.diagnose()
-    },
-
     toggleSound() {
       this.soundOn = sound.toggle()
       // 开启时给一声反馈，让用户确认真的有声了

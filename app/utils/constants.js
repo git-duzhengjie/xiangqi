@@ -47,15 +47,15 @@ export const INITIAL_FEN =
   'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1'
 
 // ---------- 难度配置 ----------
-// Pikafish 通过限制搜索深度/时间/技能等级来调节棋力
+// Pikafish 通过限制搜索深度/时间来调节棋力。
+//
+// 原本铺了七档，但两端其实都没什么人用：入门弱到不像对手，
+// 专家以上人类基本赢不了，选了也只是被虐。留中间最实用的三档，
+// 选择成本更低，跨度也够明显。
 export const DIFFICULTY_LEVELS = [
-  { id: 1, name: '入门', depth: 1,  movetime: 100,  elo: 1000, desc: '适合初学者' },
-  { id: 2, name: '简单', depth: 3,  movetime: 200,  elo: 1400, desc: '会吃子，偶有失误' },
-  { id: 3, name: '普通', depth: 6,  movetime: 500,  elo: 1800, desc: '业余中等水平' },
-  { id: 4, name: '困难', depth: 10, movetime: 1000, elo: 2200, desc: '业余强手' },
-  { id: 5, name: '专家', depth: 14, movetime: 2000, elo: 2600, desc: '接近专业棋手' },
-  { id: 6, name: '大师', depth: 20, movetime: 4000, elo: 3000, desc: '专业大师水平' },
-  { id: 7, name: '棋神', depth: 0,  movetime: 8000, elo: 9999, desc: '引擎全力，人类难胜' }
+  { id: 1, name: '简单', depth: 3,  movetime: 200,  elo: 1400, desc: '会吃子，偶有失误' },
+  { id: 2, name: '普通', depth: 6,  movetime: 500,  elo: 1800, desc: '业余中等水平' },
+  { id: 3, name: '困难', depth: 10, movetime: 1000, elo: 2200, desc: '业余强手' }
 ]
 
 // ---------- 对局结果 ----------

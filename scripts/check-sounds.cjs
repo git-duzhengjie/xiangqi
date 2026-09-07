@@ -109,12 +109,17 @@ console.log('');
 console.log('=== 5. 语法自检 ===');
 for (const [f, label] of [['app/utils/sound.js', 'sound.js'], ['app/pages/game/game.js', 'game.js']]) {
   const s = fs.readFileSync(f, 'utf8');
-  let d = 0, p = 0;
-  for (const ch of s) {
-    if (ch === '{') d++; else if (ch === '}') d--;
-    if (ch === '(') p++; else if (ch === ')') p--;
-  }
-  ok(d === 0 && p === 0, label + ' 括号配平 {}=' + d + ' ()=' + p);
+  // 早先这里是裸数括号，会把注释和字符串里的 play() / stop() 一并计入，
+  // 改一处注释就报假错（曾误报 ()=-2）。排查无声时多一个假信号就多一次误导，
+  // 直接交给 Node 自带解析器判定，结论才可靠。
+  const stripped = s
+    .replace(/^\s*import\s+[\s\S]*?from\s+['"][^'"]*['"]\s*;?/gm, '')
+    .replace(/^\s*import\s+['"][^'"]*['"]\s*;?/gm, '')
+    .replace(/^\s*export\s+default\s+/gm, 'var __d = ')
+    .replace(/^\s*export\s+/gm, '');
+  let pass = true, msg = '';
+  try { new Function(stripped); } catch (e) { pass = false; msg = ' -> ' + e.message; }
+  ok(pass, label + ' 语法解析' + msg);
 }
 
 console.log('');

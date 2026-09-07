@@ -52,11 +52,33 @@ const SOUND_FILES = {
  * 不再赌哪一种写法对：把几种常见形式都列出来，让程序在设备上自己试。
  * 首选 _www/ （App 端官方推荐，映射到应用资源目录）。
  */
-const BASE_CANDIDATES = [
-  '_www/static/sounds/',   // App 端正解
-  '/static/sounds/',       // H5 / 小程序
-  'static/sounds/'         // 相对路径兼容
-]
+/**
+ * 解析音频目录为【设备上的真实绝对路径】。
+ *
+ * 为什么不再用相对路径候选列表：
+ * 之前写 '/static/sounds/'（绝对路径）找不到文件；改成 '_www/static/sounds/'
+ * 后，logcat 里已能看到 GenericSource: FileSource，说明文件确实被打开了。
+ * 但“猬候选前缀”本身就不可靠，而且配合自愈逻辑反而会把已经正确的
+ * 前缀换成错的（见下方 fallbackPath 删除说明）。
+ *
+ * plus.io.convertLocalFileSystemURL 能把 '_www/xxx' 直接转成
+ * /data/data/<pkg>/files/apps/<appid>/www/xxx 这样的真实路径，
+ * 不再依赖播放器内部的相对路径规则，一次到位。
+ */
+function resolveSoundDir() {
+  // #ifdef APP-PLUS
+  try {
+    if (typeof plus !== 'undefined' && plus.io && plus.io.convertLocalFileSystemURL) {
+      const abs = plus.io.convertLocalFileSystemURL('_www/static/sounds/')
+      if (abs) return abs.charAt(abs.length - 1) === '/' ? abs : abs + '/'
+    }
+  } catch (e) {}
+  return '_www/static/sounds/'
+  // #endif
+  // #ifndef APP-PLUS
+  return '/static/sounds/'
+  // #endif
+}
 const POOL_SIZE = 2          // 每种音效的实例数
 const STORAGE_KEY = 'xq_sound_on'
 
@@ -66,7 +88,8 @@ class SoundService {
     this.pools = {}          // key -> [ctx, ctx]
     this.cursor = {}         // key -> 下一个使用的下标
     this.ready = false
-    this.baseIndex = 0       // 当前使用的路径候选下标
+    this.dir = ''            // 音频目录（延迟到首次使用时解析，plus 此时才就绪）
+    this.lastError = ''      // 最近一次错误，供页面上的自检按钮展示
     this.loadSetting()
   }
 
@@ -112,11 +135,14 @@ class SoundService {
     const file = SOUND_FILES[key]
     if (!file) return null
 
+    // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算
+    if (!this.dir) this.dir = resolveSoundDir()
+
     const arr = []
     for (let i = 0; i < POOL_SIZE; i++) {
       try {
         const ctx = uni.createInnerAudioContext()
-        ctx.src = BASE_CANDIDATES[this.baseIndex] + file
+        ctx.src = this.dir + file
         // 音效不能循环，也不该抢占背景音乐焦点
         ctx.loop = false
         // 必须为 false。原先写 true（“跟随系统静音键”听着很合理），结果模拟器上完全无声。
@@ -128,11 +154,11 @@ class SoundService {
         ctx.obeyMuteSwitch = false
         ctx.volume = 1.0
         ctx.onError((err) => {
-          console.warn('[sound] 播放出错 ' + key + ':', JSON.stringify(err))
-          // 路径自愈：各平台/基座对音频 src 的解析规则不一致，写死一种写法很容易
-          // 一错到底、而且静默无声。这里在首次出错时自动换下一个候选前缀重建，
-          // 避免“改一次路径就要重打包验证一次”的反复折腾。
-          this.fallbackPath(key)
+          // 把错误存下来，页面上的自检入口可以直接弹出来看。
+          // 生产构建会剥离 console.log，光打日志在正式包里根本看不到，
+          // 这正是之前几轮反复打偏的原因。
+          this.lastError = key + ': ' + JSON.stringify(err)
+          console.warn('[sound] 播放出错 ' + this.lastError)
         })
         arr.push(ctx)
       } catch (e) {
@@ -151,30 +177,6 @@ class SoundService {
    * 播放指定音效。任何异常都吞掉，绝不影响棋局。
    * @param {string} key SOUND_FILES 中的键
    */
-  /**
-   * 路径自愈：当前前缀播不出声时，换下一个候选重建实例池。
-   *
-   * 为什么需要它：音频 src 的解析规则在不同平台、不同基座下并不一致，
-   * 而一旦写错就是静默无声，既不报错也无日志（生产构建还会剥离
-   * console.log）。光靠推断很容易一错再错，每试一次都要重新打包。
-   * 所以直接把候选列表内置，让它在设备上自己试出能用的那个。
-   */
-  fallbackPath(key) {
-    if (this.baseIndex >= BASE_CANDIDATES.length - 1) return
-    this.baseIndex++
-    const next = BASE_CANDIDATES[this.baseIndex]
-    console.warn('[sound] 路径失败，切换到: ' + next)
-    // 销毁全部旧实例，下次 play 会用新前缀重建
-    try {
-      Object.values(this.pools).forEach(pool => {
-        pool.forEach(c => { try { c.destroy() } catch (e) {} })
-      })
-    } catch (e) {}
-    this.pools = {}
-    this.cursor = {}
-    this.ready = false
-  }
-
   play(key) {
     if (!this.enabled) return
     if (!SOUND_FILES[key]) {
@@ -189,16 +191,22 @@ class SoundService {
       this.cursor[key] = (idx + 1) % pool.length
       const ctx = pool[idx]
 
-      // 关键：这里绝不能先 stop()。
+      // 关键：这里既不能 stop()，也不要无条件 seek(0)。
       //
-      // Android 底层是 MediaPlayer 状态机，stop() 会把它打到 Stopped 态，
-      // 必须重新 prepare() 才能再播；此时直接 play() 会被静默丢弃 ——
-      // 不报错、不回调，表现就是彻底没声。我之前为了“回到起点”加的
-      // stop()，恰恰把播放器打成了不可播状态。
+      // 1) stop() 会把 Android 底层 MediaPlayer 打到 Stopped 态，必须重新
+      //    prepare() 才能再播，此时 play() 会被静默丢弃。
+      // 2) seek() 同样危险：刚创建的实例还在异步 prepare，尚未进入
+      //    Prepared 态，此时 seek 属于非法调用，会让播放器进入异常状态，
+      //    紧跟着的 play() 同样无声。日志里的表现就是：文件已打开
+      //    （GenericSource: FileSource）、播放器已建好，却始终没有 AudioTrack。
       //
-      // 正确做法：直接 seek(0) + play()。seek 在 Started/Paused/Prepared 态
-      // 都合法，既能重头播放，又不会破坏状态机。
-      try { ctx.seek(0) } catch (e) {}
+      // 正确做法：直接 play()。重头播放靠实例池轮换来保证（同一音效两个
+      // 实例交替用），而不是靠手动重置进度。只有在确实已经播放过、
+      // 确保处于已就绪状态时，重置进度才是安全的。
+      if (ctx.__xqPlayed) {
+        try { ctx.seek(0) } catch (e) {}
+      }
+      ctx.__xqPlayed = true
       ctx.play()
       // 留一条痕迹：无声问题最难的是分不清“没调用”还是“调了没响”，
       // 有了这行日志，adb logcat 一搜就能区分两者
@@ -242,6 +250,38 @@ class SoundService {
   toggle() {
     this.setEnabled(!this.enabled)
     return this.enabled
+  }
+
+  /**
+   * 音效自检：把关键状态回传给页面，直接弹窗展示。
+   *
+   * 为什么要这个：无声问题最难的是信息不可见 —— 生产构建会剥离
+   * console.log，adb 日志里什么都看不到，只能靠猜，而每猬一次都要
+   * 重新打包。把状态直接显示在屏幕上，一眼就能定位到具体环节。
+   */
+  diagnose() {
+    if (!this.dir) this.dir = resolveSoundDir()
+    const lines = []
+    lines.push('开关: ' + (this.enabled ? '开' : '关'))
+    lines.push('目录: ' + this.dir)
+    lines.push('实例池: ' + Object.keys(this.pools).length + ' 种')
+
+    const pool = this.ensurePool('move')
+    lines.push('move 实例: ' + (pool && pool.length ? pool.length + ' 个' : '创建失败'))
+    if (pool && pool.length) {
+      lines.push('src: ' + pool[0].src)
+      lines.push('时长: ' + (pool[0].duration || 0))
+    }
+    lines.push('最近错误: ' + (this.lastError || '无'))
+
+    try {
+      uni.showModal({
+        title: '音效自检',
+        content: lines.join('\n'),
+        showCancel: false
+      })
+    } catch (e) {}
+    return lines.join('\n')
   }
 
   stopAll() {

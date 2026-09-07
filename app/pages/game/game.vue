@@ -5,7 +5,7 @@
       <view class="btn-back" @click="goBack">‹ 返回</view>
       <view class="title">{{ difficultyName }}</view>
       <!-- 声音开关：放顶栏常驻，下棋时随手可关，不用翻菜单 -->
-      <view class="btn-sound" @click="toggleSound">{{ soundOn ? '🔊' : '🔇' }}</view>
+      <view class="btn-sound" @click="toggleSound" @longpress="diagnoseSound">{{ soundOn ? '🔊' : '🔇' }}</view>
       <view class="btn-menu" @click="showMenu = !showMenu">⋮</view>
     </view>
 

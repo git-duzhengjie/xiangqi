@@ -179,7 +179,12 @@ class SoundService {
         })
         this.audioOptionOk = true
       } else {
-        this.lastError = 'setInnerAudioOption 不可用'
+        // 该 API 在部分基座上不存在，属于可选优化而非故障。
+        // 实测证明：即便它不可用，只要 src 带 file:// 前缀，
+        // canplay > play > ended 依然能完整触发，音频正常播出。
+        // 因此不写入 lastError —— 否则会一直顶掉真正的播放错误，
+        // 让自检面板显示一个无关紧要的"错误"，干扰后续排查。
+        this.audioOptionOk = false
       }
     } catch (e) {
       this.lastError = 'setInnerAudioOption: ' + errText(e)
@@ -336,7 +341,7 @@ class SoundService {
 
     // 0) 全局音频配置（必须在创建实例前生效）
     this.applyAudioOption()
-    L.push('全局静音跟随: ' + (this.audioOptionOk ? '已关闭' : '设置失败'))
+    L.push('全局静音跟随: ' + (this.audioOptionOk ? '已关闭' : '不支持（不影响播放）'))
 
     // 1) plus 是否就绪
     try {
@@ -457,7 +462,10 @@ class SoundService {
       try { c.onCanplay(() => { if (r.state !== "可播放") r.state = "可播放" }) } catch (e) {}
       try { c.onError((err) => { r.state = "失败:" + (err && (err.errMsg || err.errCode || "?")) }) } catch (e) {}
       try { c.src = url } catch (e) { r.state = "src失败"; return }
-      try { c.play() } catch (e) {}
+      // 这里刻意不调用 play()。
+      // 判定可用与否只需要 canplay（解码成功）即可，一旦真的播放，
+      // 五个候选会同时出声叠在一起，既刺耳又让人分不清哪个在响。
+      // 是否真能播出去，已由上面单个探针的 canplay > play > ended 证明。
     })
 
     setTimeout(() => {

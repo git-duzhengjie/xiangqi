@@ -65,6 +65,16 @@ const SOUND_FILES = {
  * /data/data/<pkg>/files/apps/<appid>/www/xxx 这样的真实路径，
  * 不再依赖播放器内部的相对路径规则，一次到位。
  */
+/**
+ * 统一提取异常文本。
+ * 直接把 error 对象拼进字符串只会得到 [object Object]，
+ * 排查时等于什么都没说。
+ */
+function errText(e) {
+  if (!e) return '未知'
+  return e.message || e.errMsg || String(e)
+}
+
 function resolveSoundDir() {
   // #ifdef APP-PLUS
   try {
@@ -136,35 +146,49 @@ class SoundService {
     if (!file) return null
 
     // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算
-    if (!this.dir) this.dir = resolveSoundDir()
+    if (!this.dir) {
+      try { this.dir = resolveSoundDir() }
+      catch (e) { this.lastError = '目录解析失败: ' + errText(e); return null }
+    }
 
     const arr = []
     for (let i = 0; i < POOL_SIZE; i++) {
+      let ctx = null
       try {
-        const ctx = uni.createInnerAudioContext()
-        ctx.src = this.dir + file
-        // 音效不能循环，也不该抢占背景音乐焦点
-        ctx.loop = false
-        // 必须为 false。原先写 true（“跟随系统静音键”听着很合理），结果模拟器上完全无声。
-        // 许多 Android 模拟器（MuMu / 雷电等）默认处于静音开关打开的状态，部分真机的
-        // 勿扰模式也会命中；一旦命中，音效被系统静默地吞掉 —— 不报错、不回调、
-        // 日志干净，表现就是“开关看得见、声音听不到”，排查成本极高。
-        // 棋类游戏的落子声属于核心反馈而非背景音乐，用户想静音会直接用我们自己的
-        // 🔊 开关，没必要再受系统静音键限制。
-        ctx.obeyMuteSwitch = false
-        ctx.volume = 1.0
+        ctx = uni.createInnerAudioContext()
+      } catch (e) {
+        // 必须把异常存下来。之前这里只有 console.warn，而正式包会剥离 console，
+        // 导致自检弹窗显示"创建失败"但"最近错误: 无"，真正原因被吞得一干二净。
+        this.lastError = '创建' + key + '失败: ' + errText(e)
+        continue
+      }
+
+      // 属性逐个隔离赋值。
+      // ES 模块是严格模式，给只读属性赋值会直接抛 TypeError 而非静默忽略；
+      // 原先四个赋值和 createInnerAudioContext 共用一个 try，任意一个抛错都会
+      // 让整个实例被丢弃，最终表现为"实例池 0 种"，却看不出是哪一步的问题。
+      // 拆开之后，即便某个属性不被当前基座支持，实例本身仍然可用。
+      try { ctx.src = this.dir + file } catch (e) { this.lastError = 'src: ' + errText(e) }
+      try { ctx.loop = false } catch (e) {}
+      try { ctx.autoplay = false } catch (e) {}
+      // obeyMuteSwitch 必须为 false。写 true（"跟随系统静音键"）看着合理，
+      // 但很多 Android 模拟器默认就处于静音开关打开的状态，真机的勿扰模式也会
+      // 命中；一旦命中，音效被系统静默吞掉——不报错、不回调、日志干净，表现
+      // 就是"开关看得见、声音听不到"。落子声属于核心反馈而非背景音乐，用户想
+      // 静音会直接用我们自己的喇叭开关。
+      try { ctx.obeyMuteSwitch = false } catch (e) {}
+      try { ctx.volume = 1.0 } catch (e) {}
+
+      try {
         ctx.onError((err) => {
-          // 把错误存下来，页面上的自检入口可以直接弹出来看。
-          // 生产构建会剥离 console.log，光打日志在正式包里根本看不到，
-          // 这正是之前几轮反复打偏的原因。
-          this.lastError = key + ': ' + JSON.stringify(err)
+          this.lastError = key + ': ' + (err && (err.errMsg || err.errCode || JSON.stringify(err)))
           console.warn('[sound] 播放出错 ' + this.lastError)
         })
-        arr.push(ctx)
-      } catch (e) {
-        console.warn('[sound] 创建实例失败 ' + key + ':', e)
-      }
+      } catch (e) {}
+
+      arr.push(ctx)
     }
+
     if (!arr.length) return null
     this.pools[key] = arr
     this.cursor[key] = 0
@@ -253,33 +277,71 @@ class SoundService {
   }
 
   /**
-   * 音效自检：把关键状态回传给页面，直接弹窗展示。
+   * 音效自检：逐步探测每一步，把结果直接弹到屏幕上。
    *
-   * 为什么要这个：无声问题最难的是信息不可见 —— 生产构建会剥离
-   * console.log，adb 日志里什么都看不到，只能靠猜，而每猬一次都要
-   * 重新打包。把状态直接显示在屏幕上，一眼就能定位到具体环节。
+   * 为什么要做到这么细：正式包会剥离 console.log，adb 日志里看不到任何音效
+   * 信息，无声时只能靠猜，而每验证一次都要重新打包。把每一步的成败都显示
+   * 出来，一次打包就能定位到具体是哪个环节断的。
    */
   diagnose() {
-    if (!this.dir) this.dir = resolveSoundDir()
-    const lines = []
-    lines.push('开关: ' + (this.enabled ? '开' : '关'))
-    lines.push('目录: ' + this.dir)
-    lines.push('实例池: ' + Object.keys(this.pools).length + ' 种')
+    const L = []
+    L.push('开关: ' + (this.enabled ? '开' : '关'))
 
-    const pool = this.ensurePool('move')
-    lines.push('move 实例: ' + (pool && pool.length ? pool.length + ' 个' : '创建失败'))
-    if (pool && pool.length) {
-      lines.push('src: ' + pool[0].src)
-      lines.push('时长: ' + (pool[0].duration || 0))
-    }
-    lines.push('最近错误: ' + (this.lastError || '无'))
-
+    // 1) plus 是否就绪
     try {
-      uni.showModal({
-        title: '音效自检',
-        content: lines.join('\n'),
-        showCancel: false
-      })
+      L.push('plus: ' + (typeof plus !== 'undefined' ? '就绪' : '不可用'))
+    } catch (e) { L.push('plus: 不可用') }
+
+    // 2) 目录解析
+    try {
+      if (!this.dir) this.dir = resolveSoundDir()
+      L.push('目录: ' + this.dir)
+    } catch (e) {
+      L.push('目录解析失败: ' + errText(e))
+      return this.showDiag(L)
+    }
+
+    // 3) 创建 API 是否可用（单独试一个，问题能精确到这一步）
+    let probe = null
+    try {
+      probe = uni.createInnerAudioContext()
+      L.push('createInnerAudioContext: 可用')
+    } catch (e) {
+      L.push('createInnerAudioContext 失败: ' + errText(e))
+      return this.showDiag(L)
+    }
+
+    // 4) 逐个属性赋值试探。ES 模块是严格模式，给只读属性赋值会直接抛错，
+    //    而不是静默忽略 —— 这类失败最容易被整块 try/catch 吞掉。
+    try { probe.src = this.dir + SOUND_FILES.move; L.push('src 赋值: 成功') }
+    catch (e) { L.push('src 赋值失败: ' + errText(e)) }
+    try { probe.loop = false; L.push('loop 赋值: 成功') }
+    catch (e) { L.push('loop 赋值失败: ' + errText(e)) }
+    try { probe.obeyMuteSwitch = false; L.push('obeyMuteSwitch 赋值: 成功') }
+    catch (e) { L.push('obeyMuteSwitch 赋值失败: ' + errText(e)) }
+    try { probe.volume = 1.0; L.push('volume 赋值: 成功') }
+    catch (e) { L.push('volume 赋值失败: ' + errText(e)) }
+
+    // 5) 直接用这个探针播放，绕开实例池，判断问题在池还是在播放本身
+    try { probe.play(); L.push('探针 play(): 已调用') }
+    catch (e) { L.push('探针 play() 失败: ' + errText(e)) }
+
+    // 6) 走正式链路建池
+    const pool = this.ensurePool('move')
+    if (!pool || !pool.length) {
+      L.push('实例池: 创建失败')
+    } else {
+      L.push('实例池: ' + pool.length + ' 个')
+      L.push('时长: ' + (pool[0].duration || 0))
+    }
+    L.push('最近错误: ' + (this.lastError || '无'))
+
+    this.showDiag(L)
+  }
+
+  showDiag(lines) {
+    try {
+      uni.showModal({ title: '音效自检', content: lines.join('\n'), showCancel: false })
     } catch (e) {}
     return lines.join('\n')
   }

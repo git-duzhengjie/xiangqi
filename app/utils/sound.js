@@ -194,42 +194,92 @@ class SoundService {
     }
   }
 
+  /**
+   * 确保 this.dir 是设备上可用的真实路径。
+   *
+   * 为什么单独抽成一个方法：
+   * 音频目录依赖 plus.io.convertLocalFileSystemURL，而 preload 在页面
+   * onLoad 阶段就跑了，那时 plus 常常还没就绪，只能拿到兜底的相对路径
+   * '_www/static/sounds/'。这个路径 Android 原生播放器打不开，报 MediaError。
+   *
+   * 上一版的修复把"重试解析"写进了 ensurePool，但位置在
+   * "if (this.pools[key]) return" 早退之后 —— preload 已经用兜底路径
+   * 把池子建好了，此后每次 play 都在第一行直接返回，重试代码一次都没执行。
+   * 表现就是首次启动始终无声，必须手动关一次音效再打开（stopAll 会清空
+   * pools，早退失效，才轮到重试逻辑）。
+   *
+   * 所以这里独立出来，由 ensurePool 在早退【之前】调用，保证每次取实例
+   * 都会检查一遍路径是否还停留在兜底状态。
+   *
+   * @returns {boolean} 是否已拿到可用目录
+   */
+  ensureDir() {
+    // 已经是真实绝对路径，无需重复解析
+    if (this.dir && !this.dirIsFallback) return true
+
+    let newDir = ''
+    try {
+      newDir = resolveSoundDir()
+    } catch (e) {
+      this.lastError = '目录解析失败: ' + errText(e)
+      return !!this.dir
+    }
+    if (!newDir) return !!this.dir
+
+    // 判定是否仍是兜底：真实路径要么带 file:// 前缀，要么是 /data 开头的绝对路径
+    const isFallback = newDir.indexOf('file://') !== 0 && newDir.indexOf('/data/') !== 0
+
+    if (!isFallback) {
+      // plus 已就绪，拿到真实路径
+      const changed = this.dir !== newDir
+      this.dir = newDir
+      this.dirIsFallback = false
+      if (changed) {
+        // 路径变了，旧池子里那些实例的 src 全是错的，必须整体重建。
+        // 这里要真正销毁掉，否则原生层的 MediaPlayer 会泄漏。
+        this.releasePools()
+      }
+      return true
+    }
+
+    // plus 仍未就绪，先用兜底路径顶着，下次再试
+    if (!this.dir) {
+      this.dir = newDir
+      this.dirIsFallback = true
+    }
+    return true
+  }
+
+  /** 销毁并清空全部实例池（内部复用，不改变 enabled 状态） */
+  releasePools() {
+    try {
+      Object.keys(this.pools).forEach(k => {
+        const pool = this.pools[k] || []
+        pool.forEach(ctx => {
+          try { ctx.stop() } catch (e) {}
+          try { ctx.destroy() } catch (e) {}
+        })
+      })
+    } catch (e) {}
+    this.pools = {}
+    this.cursor = {}
+    this.ready = false
+  }
+
   ensurePool(key) {
-    if (this.pools[key]) return this.pools[key]
     const file = SOUND_FILES[key]
     if (!file) return null
 
     // 创建任何实例前，先确保全局音频配置已生效
     this.applyAudioOption()
 
-    // 延迟解析目录：模块刚导入时 plus 可能还没就绪，放到真正要用时再算。
-    // 注意：如果首次解析时 plus 不可用，会返回 fallback 路径（_www/static/...），
-    // 但这个路径在 Android 原生播放器里打不开，会报 MediaError。
-    // 所以这里同时记一个 dirIsFallback 标记，play() 时如果发现是 fallback，
-    // 会再试一次 plus 解析——只要 plus 后来就绪了，就能自动切到正确路径，
-    // 不必等用户手动开关一次。
-    if (!this.dir || this.dirIsFallback) {
-      try {
-        const newDir = resolveSoundDir()
-        const isFallback = newDir.indexOf('file://') !== 0 && newDir.indexOf('/data/') !== 0
-        if (newDir && !isFallback) {
-          // 解析到了真正的绝对路径，替换掉 fallback
-          this.dir = newDir
-          this.dirIsFallback = false
-          // 路径变了，旧池子用的是错路径，必须清掉重建
-          this.pools = {}
-          this.cursor = {}
-        } else if (!this.dir) {
-          // 第一次解析，且仍然是 fallback，先记着，后面再重试
-          this.dir = newDir
-          this.dirIsFallback = true
-        }
-        // else：已经有 fallback 了，这次 plus 还是没好，保持原样
-      } catch (e) {
-        this.lastError = '目录解析失败: ' + errText(e)
-        if (!this.dir) return null
-      }
-    }
+    // 关键顺序：目录检查必须在"池已存在就早退"之前。
+    // 若此刻 plus 刚就绪、路径从兜底升级为真实路径，ensureDir 会顺带
+    // 把旧池子清掉，下面的早退自然失效，于是用新路径重建。
+    this.ensureDir()
+    if (!this.dir) return null
+
+    if (this.pools[key]) return this.pools[key]
 
     const arr = []
     for (let i = 0; i < POOL_SIZE; i++) {

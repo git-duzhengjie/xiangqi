@@ -13,7 +13,10 @@ const ok = (c, m) => { console.log('  ' + (c ? '[OK]  ' : '[FAIL]') + ' ' + m); 
 // ---------- 1. WAV 文件真实性 ----------
 console.log('=== 1. WAV 文件解析校验 ===');
 const dir = 'app/static/sounds';
-const expect = ['move', 'capture', 'select', 'check', 'win', 'lose', 'draw', 'undo', 'hint', 'click'];
+const expect = ['move', 'capture', 'select', 'check', 'win', 'lose', 'draw', 'undo', 'hint', 'click',
+  // 人声播报：吃子与将军。纯提示音在手机小喇叭上辞别度低，
+  // 中文报话能让关键局面一听就明白发生了什么。
+  'voice_capture', 'voice_check'];
 let totalKB = 0;
 
 for (const name of expect) {

@@ -112,17 +112,17 @@ const F = {
 
 const defs = {
   // 走子：清脆的木质落子声
-  move: () => woodHit(0.13, 420, 0.42, 0.85),
+  move: () => woodHit(0.13, 520, 0.50, 1.0),
 
   // 吃子：更重、更闷，带一点低频冲击，体现"打击"
   capture: () => {
-    const hit = woodHit(0.22, 250, 0.30, 1.0);
-    const low = tones([{ f: 110, d: 0.12 }], 0.35);
+    const hit = woodHit(0.22, 340, 0.45, 1.0);
+    const low = tones([{ f: 165, d: 0.10 }], 0.45);
     return mix(hit, low);
   },
 
   // 选中棋子：极轻的一声"嗒"，不能吵
-  select: () => woodHit(0.055, 900, 0.75, 0.30),
+  select: () => woodHit(0.055, 1100, 0.75, 0.45),
 
   // 将军：短促上行两音，带紧张感
   check: () => tones([
@@ -166,7 +166,7 @@ const defs = {
   ], 0.32),
 
   // 按钮点击：极短的轻响
-  click: () => woodHit(0.04, 1200, 0.85, 0.22)
+  click: () => woodHit(0.04, 1400, 0.85, 0.40)
 };
 
 // ---------- 输出 ----------
@@ -182,7 +182,7 @@ for (const [name, fn] of Object.entries(defs)) {
   let peak = 0;
   for (const v of s) peak = Math.max(peak, Math.abs(v));
   if (peak > 0.001) {
-    const target = 0.82;
+    const target = 0.95;
     if (peak > target) for (let i = 0; i < s.length; i++) s[i] *= target / peak;
   }
   // 收尾淡出，消除爆音

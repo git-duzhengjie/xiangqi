@@ -35,7 +35,9 @@ const SOUND_FILES = {
   draw: 'draw.wav',        // 和
   undo: 'undo.wav',        // 悔棋
   hint: 'hint.wav',        // 提示
-  click: 'click.wav'       // 按钮
+  click: 'click.wav',      // 按钮
+  voice_check: 'voice_check.wav',   // 人声：将军
+  voice_capture: 'voice_capture.wav' // 人声：吃
 }
 
 /**
@@ -296,11 +298,13 @@ class SoundService {
   // 让调用方读起来是"发生了什么"，而不是"放哪个文件"
 
   playMove(isCapture) {
-    this.play(isCapture ? 'capture' : 'move')
+    // 吃子直接播人声"吃"，比木质撞击声更清晰直观。
+    // 普通走子保留木质落子声，不喧宾夺主。
+    this.play(isCapture ? 'voice_capture' : 'move')
   }
 
   playSelect() { this.play('select') }
-  playCheck() { this.play('check') }
+  playCheck() { this.play('voice_check') }
   playUndo() { this.play('undo') }
   playHint() { this.play('hint') }
   playClick() { this.play('click') }

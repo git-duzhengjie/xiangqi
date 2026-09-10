@@ -46,7 +46,7 @@ const CASES = [
     fen: '4k1rr1/3P1P3/1P2P2c1/9/8p/9/9/4Bp3/3p5/4RK3 w - - 0 1',
     expectRed: 7, expectBlack: 7,
     goal: 'draw',
-    reason: '古谱与维基均记载：红方看似有胜机，实为和棋。正解为守和。'
+    reason: '页面 DhtmlXQ_result=和棋；红黑各七子与「七星」之名一致。'
   },
   {
     name: '蚯蚓降龙',
@@ -54,7 +54,23 @@ const CASES = [
     fen: '5k2r/4P1P2/9/9/5r2p/2P6/9/4B4/4A4/3AK4 w - - 0 1',
     expectRed: 7, expectBlack: 4,
     goal: 'draw',
-    reason: '双车对双卒，车强却被卒牵制；古谱记载为和局。'
+    reason: '车强反被卒牵制，古谱记载为和局。'
+  },
+  {
+    name: '野马操田',
+    source: '《百局象棋谱》',
+    fen: '3k5/4P4/3Pb4/1Rp1p4/2b6/6nrr/9/4B4/4A4/2BAK4 w - - 0 1',
+    expectRed: 8, expectBlack: 8,
+    goal: 'draw',
+    reason: '黑方马与双车集于一线（FEN 片段 6nrr），子力活跃。'
+  },
+  {
+    name: '千里独行',
+    source: '《百局象棋谱》',
+    fen: '4k4/3P1P3/4r4/2p3P2/6N2/9/P8/3Ap3B/9/4K4 w - - 0 1',
+    expectRed: 8, expectBlack: 4,
+    goal: 'draw',
+    reason: '黑方仅一车为进攻主力，故名千里独行。'
   }
 ];
 

@@ -1,26 +1,51 @@
-fix(sound): 修复首次启动无声——目录重试逻辑被缓存早退挡住
+fix(sound): 第三次修首次启动无声——两个状态标记都被提前锁死
 
-同一个问题修了两次，教训值得记下来。
+同一个问题修了三次，前两次都改错了方向，把过程记下来。
 
-现象：首次启动对局始终无声，手动关一次音效再打开就正常。
+决定性线索：toggle() 里根本没有任何路径相关代码，它只调了 stopAll()
+做「销毁实例池 + 清空」。既然关一次开关就能出声，说明问题不在路径
+解析，而在实例创建时依赖的那些一次性状态标记。
 
-第一次修复犯的错：把「若路径为兜底值则重试解析」的代码加在了
-ensurePool 里，但位置在 if (this.pools[key]) return 早退之后。
-preload 在页面 onLoad 时已经用兜底路径把池建好了，此后每次 play
-都在第一行直接返回，重试代码一次都没跑过。表现就是必须关一次开关
-（stopAll 清空 pools，早退失效）才能轮到重试逻辑。
+本次定位到两处提前锁死：
 
-第二次修复的改动：
+一、applyAudioOption 先置位再调用
 
-1. 抽出 ensureDir() 独立方法，由 ensurePool 在早退之前调用。
-   每次取实例都会检查路径是否还停留在兜底状态，一旦 plus 就绪
-   就自动升级为真实路径，并顺带清空旧池重建。
+  if (this.audioOptionApplied) return
+  this.audioOptionApplied = true     // 先锁，再去调用
 
-2. 抽出 releasePools() 内部方法，避免 stopAll 与 destroy 重复代码。
-   路径升级时调用它做销毁加清空，防止原生 MediaPlayer 泄漏。
+preload 在 plus 与基座音频模块就绪之前首次调用它，此时
+uni.setInnerAudioOption 要么还不存在、要么调了不生效，但 flag 已经
+锁死，此后永远不再重设。obeyMuteSwitch 便一直保持默认的 true，
+即跟随系统静音键，模拟器和真机勿扰模式下音效被系统静默吞掉：
+不报错、不回调、日志干净，表现正是「开关看得见、声音听不到」。
+改为以 audioOptionOk 作为判断依据，成功才锁，fail 回调里主动摘掉
+标记，允许后续每次创建实例前重试。
 
-3. App.vue onLaunch 增加 warmUpSound()：监听 plusready 事件，
-   外加 1.5s 兜底 setTimeout（个别机型可能已错过该事件）。
-   在应用启动阶段就把路径提前敲定，不等用户进对局页才触发。
+二、preload 的 ready 早退让上一版的启动预热完全失效
 
-4. 预热逻辑用 APP-PLUS 条件编译包裹，非 App 端不受影响。
+  if (this.ready) return
+
+对局页 onLoad 会先调一次 preload，那时 plus 往往没就绪，只能拿到
+兜底路径，但 ready 已被置成 true。于是上一版在 App.vue 里加的
+plusready 预热，进来第一行就早退了，等于白加——这也是上次改完仍然
+没声音的直接原因。
+现在改为 if (this.ready && !this.dirIsFallback) return，并且只有
+真正拿到 file:// 路径时才把 ready 置 true；仍在兜底路径就保持
+false，留给 plusready 回调或首次 play 重试。同时在 preload 内部
+显式调一次 ensureDir，让路径升级时顺带清空旧池重建。
+
+三、新增 scripts/test-sound-timing.cjs 时序模拟测试
+
+前两次失败的根本教训是：只做静态字符串校验，没有真正跑一遍状态
+流转，所以「看着对」但上机还是没声。这个脚本把 uni 与 plus 全部
+桩掉，按真机的四种时序各跑一遍，直接断言最终有没有用 file://
+路径播出声音。
+
+  场景 A  plus 延迟就绪（本次故障场景）  PASS
+  场景 B  plus 启动即就绪                PASS
+  场景 C  基座无 setInnerAudioOption     PASS
+  场景 D  plus 始终不就绪（仅验证不崩）
+
+场景 A 的输出清楚显示了修复效果：preload#1 拿到兜底路径且
+ready=false 不再锁死，preload#2 成功升级为 file:// 真实路径，
+最终播放的 src 正确。

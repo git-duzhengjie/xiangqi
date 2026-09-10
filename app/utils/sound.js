@@ -145,11 +145,29 @@ class SoundService {
    * 只是第一声可能有轻微延迟。
    */
   preload() {
-    if (this.ready) return
+    // 已经用真实路径预热过就不用再来一遍。
+    //
+    // 注意这里的条件不能只写 if (this.ready) return。
+    // 对局页 onLoad 会先调一次 preload，那时 plus 往往还没就绪，
+    // 只能拿到兜底路径，但 ready 已被置成 true；随后 App.vue 里
+    // plusready 触发的预热就会在第一行直接早退，等于白加。
+    // 所以必须把"路径是否还停留在兜底状态"一起纳入判断：
+    // 只要还在用兜底路径，就允许再预热一次。
+    if (this.ready && !this.dirIsFallback) return
+
     this.applyAudioOption()
+
+    // 先把目录敲定，再决定要不要建池。
+    // ensureDir 内部会在路径从兜底升级为真实路径时清空旧池，
+    // 于是下面的 ensurePool 会用新路径重建。
+    this.ensureDir()
+
     try {
       Object.keys(SOUND_FILES).forEach(key => this.ensurePool(key))
-      this.ready = true
+      // 只有拿到真实路径时才算预热完成。
+      // 仍是兜底路径的话保持 ready = false，留给后续的 plusready
+      // 回调或首次 play 再重试，避免被永久锁死在错误路径上。
+      this.ready = !this.dirIsFallback
     } catch (e) {
       this.lastError = 'preload: ' + errText(e)
       console.warn('[sound] preload 失败:', e)

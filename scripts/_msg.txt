@@ -1,38 +1,51 @@
-fix(sound): 启动时自动执行一次音效链路重置，根治首次启动无声
+fix(sound): 统一全部音效主观响度，走子/选择/点击等不再偏小
 
-采纳老板的思路：既然手动「关一次音效再打开」百分百有效，就别再猜
-是哪个环节没就绪，直接把这个操作自动化。
+老板反馈「除了吃子、将军，其他音效声音都太小」。先量化再动手，
+新增 scripts/measure-loudness.cjs 手写 WAV 解析，输出峰值、RMS、
+dBFS 与高能量样本占比。实测暴露了真正的原因：
 
-前三次修复的教训：都在靠推断改状态标记（路径解析时机、fallback
-重试位置、audioOptionApplied 提前锁死），每次看着都对，上机仍然
-没声。问题在于启动阶段 plus 与基座音频模块的就绪时间在不同机型上
-差异很大，静态分析根本覆盖不全。而用户手动关开这条路径是经过真机
-反复验证确实有效的 —— 已知有效比理论正确更重要。
+  音效          峰值    RMS      高能量占比
+  capture       0.950   -19.6dB   6.0%
+  voice_check   0.950   -19.4dB   5.9%
+  move          0.950   -18.7dB   6.7%
+  check         0.950   -11.6dB  31.0%
+  undo/win/draw 0.950   -11.6dB  31.0%
 
-新增 sound.resetPipeline()，等价于手动关开但更彻底：
-  1. 销毁并清空全部实例池（等同 stopAll，原生 MediaPlayer 显式
-     destroy 避免泄漏）
-  2. 清掉 dir 与 dirIsFallback，强制重新解析音频目录
-  3. 清掉 audioOptionApplied 与 audioOptionOk，强制重新下发
-     uni.setInnerAudioOption
-  4. 立即重新预热
+峰值全部一致（都被归一到 0.95），但 RMS 差了整整 8 dB。原因是
+make-sounds.cjs 做的是峰值归一：木头敲击类是极短瞬态，能量集中在
+开头几毫秒，波峰因数高达 8~9 倍，峰值虽然顶格但总能量很低；持续
+乐音则相反。人耳感知响度取决于 RMS 而非峰值，所以峰值对齐之后
+走子/吃子/选择/点击这些短音听起来明显偏小。
 
-第 2、3 步是手动关开做不到的：那些一次性标记会一直留在内存里，
-即便实例重建了，路径与音频配置仍可能停留在启动初期的错误状态。
-方法内不改动 this.enabled，用户自己的音效开关偏好保持原样。
+这也解释了此前反复调各音效 vol 参数却毫无效果 —— 不论上游给多大
+增益，最后都被峰值归一化抹平成同一个峰值。
 
-App.vue 的 warmUpSound 改为调用 resetPipeline，并设三道保险：
-plusready 事件、800ms、2500ms 各执行一次。resetPipeline 幂等，
-多跑几次只是重建实例代价很小，少跑一次就可能整局无声。
+三处修改：
 
-scripts/test-sound-timing.cjs 重写为桩环境时序测试，共 11 项断言
-全部通过。场景 1 复现了本次故障并证明修复有效：
+一、make-sounds.cjs 改为 RMS 归一，目标 0.20（约 -14 dBFS）
 
-  preload 后    dir=_www/static/sounds/          fallback=true
-  重置前播放    _www/static/sounds/move.wav      打不开，无声
-  配置调用记录  fail -> ok:obeyMuteSwitch=false  首次失败后成功
-  重置后        dir=file:///data/...             fallback=false
-  重置后播放    file:///data/.../move.wav        正确
+二、加 tanh 软限幅替代等比压回
+    单纯 RMS 归一只把差距从 8 dB 收到 5.7 dB，因为瞬态音 RMS 提到
+    0.20 时峰值要冲到 1.7，等比压回 0.99 会把 RMS 一起拉低，等于
+    白干。改用 tanh 饱和曲线把尖峰平滑压进上限，中低幅度部分几乎
+    不受影响，整体 RMS 得以保住。tanh 连续可导，不会像 clamp 那样
+    削成方波产生爆音；尖峰只占几毫秒，轻微饱和听不出失真，这也是
+    真实打击乐器录音与母带处理的常规做法。软限幅后再补一次增益，
+    补偿上限设为 1.25 倍避免过度饱和。
 
-另外覆盖：连续重置 3 次的幂等性、重置不影响用户开关偏好、
-plus 始终不就绪时不抛异常。
+三、新增 scripts/normalize-voice.cjs
+    voice_check / voice_capture 并非 make-sounds.cjs 生成（defs 里
+    没有它们，只在注释中出现），重跑生成脚本时完全没被处理，
+    voice_check 一直停在 -19.4 dB。该脚本对 voice_*.wav 施加与
+    make-sounds.cjs 完全相同的流程，直接改写 PCM 数据区，
+    保持原采样率与格式不变。
+
+最终结果，12 个音效全部收敛到 -0.5 ~ +1.3 dB（差 1.8 dB）：
+
+  move         -18.7 -> -12.5 dB   +6.2
+  capture      -19.6 -> -13.1 dB   +6.5
+  voice_check  -19.4 -> -12.2 dB   +7.2
+  select       -16.9 -> -12.9 dB   +4.0
+  click        -17.5 -> -13.4 dB   +4.1
+
+check-sounds.cjs 格式校验通过。

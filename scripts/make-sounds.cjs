@@ -178,19 +178,69 @@ let total = 0;
 const made = [];
 for (const [name, fn] of Object.entries(defs)) {
   let s = fn();
-  // 统一做一次峰值归一，让每个音效都达到目标响度。
+  // 按 RMS（有效值）归一，而不是按峰值归一。
   //
-  // 之前这里写的是 if (peak > target)，只在超标时衰减，偏小的音频原样放行。
-  // 结果就是 win/lose/undo/hint 这些峰值只有 23%~30%，手机小喇叭上几乎听不见，
-  // 而上游调高增益也没用——因为压根没走到放大这一步。
-  // 现在改成无条件缩放到 target：过响的压下来，过轻的提上去。
-  let peak = 0;
-  for (const v of s) peak = Math.max(peak, Math.abs(v));
-  if (peak > 0.001) {
-    const target = 0.95;
-    const gain = target / peak;
-    for (let i = 0; i < s.length; i++) {
-      s[i] = Math.max(-1, Math.min(1, s[i] * gain));
+  // 历史教训：这里原先是峰值归一到 0.95。峰值确实对齐得很整齐，
+  // 但实测 RMS 差了整整 8 dB：
+  //   capture / voice_check / move   RMS 约 -19 dB，高能量样本占比仅 6%
+  //   check / undo / win / draw      RMS 约 -12 dB，高能量样本占比 31%
+  // 因为木头敲击类是极短瞬态，能量集中在开头几毫秒，峰值虽高但总能量很小；
+  // 持续乐音则相反。人耳感知的响度取决于 RMS，不是峰值，
+  // 所以峰值对齐之后，走子/吃子/选择/点击这些短音听起来明显偏小。
+  //
+  // 这也是之前反复调各音效 vol 参数却毫无效果的原因 ——
+  // 不管上游给多大增益，最后都被这段峰值归一化抹平成同一个峰值。
+  //
+  // 现在改为两步：
+  //   1. 按 RMS 缩放到统一目标响度，保证主观音量一致
+  //   2. 峰值保护：只有超过 0.99 才等比压回，避免削波爆音
+  // 峰值保护会让极端瞬态音的 RMS 略低于目标，这是可接受的物理上限。
+  let sumSq = 0;
+  for (const v of s) sumSq += v * v;
+  const rms = Math.sqrt(sumSq / s.length);
+
+  if (rms > 0.0001) {
+    // 目标 RMS = 0.20（约 -14 dBFS），全部音效统一到这个响度。
+    const targetRms = 0.20;
+    const gain = targetRms / rms;
+    for (let i = 0; i < s.length; i++) s[i] = s[i] * gain;
+
+    // 放大后先看峰值超了多少。
+    let peak = 0;
+    for (const v of s) peak = Math.max(peak, Math.abs(v));
+
+    const ceiling = 0.99;
+    if (peak > ceiling) {
+      // 这里不能简单等比压回。
+      //
+      // 瞬态音（木头敲击）的波峰因数 peak/rms 高达 8~9 倍，
+      // 要把 RMS 提到 0.20，峰值就得冲到 1.7 以上。若等比压回 0.99，
+      // RMS 会被一起拉低回 -18 dB 左右，等于白干 —— 这正是上一版
+      // voice_check 和 capture 仍然偏小 3 dB 的原因。
+      //
+      // 改用 tanh 软限幅：尖峰被平滑地压进上限，而中低幅度部分
+      // 几乎不受影响，于是整体 RMS 能保住。tanh 连续可导，
+      // 不会像 clamp 那样把波形削成方波产生爆音。
+      // 尖峰只占几毫秒，轻微饱和人耳听不出失真，
+      // 这也是真实打击乐器录音与唱片母带处理的常规做法。
+      //
+      // drive 控制饱和强度：峰值超得越多就压得越狠。
+      const drive = peak / ceiling;
+      for (let i = 0; i < s.length; i++) {
+        s[i] = ceiling * Math.tanh(s[i] * drive / ceiling);
+      }
+
+      // 软限幅后再校一次 RMS。tanh 会带来少量能量损失，
+      // 补一次增益让最终响度回到目标，同时用 clamp 兜住极端值。
+      let sq2 = 0;
+      for (const v of s) sq2 += v * v;
+      const rms2 = Math.sqrt(sq2 / s.length);
+      if (rms2 > 0.0001 && rms2 < targetRms) {
+        const trim = Math.min(targetRms / rms2, 1.25);  // 补偿上限 1.25 倍，避免过度饱和
+        for (let i = 0; i < s.length; i++) {
+          s[i] = Math.max(-ceiling, Math.min(ceiling, s[i] * trim));
+        }
+      }
     }
   }
   // 收尾淡出，消除爆音

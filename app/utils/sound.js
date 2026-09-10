@@ -77,34 +77,71 @@ function errText(e) {
   return e.message || e.errMsg || String(e)
 }
 
-function resolveSoundDir() {
-  // 直接返回 uni-app 相对路径，让基座自己去 assets 里取资源。
-  //
-  // 关键事实（已用 adb + APK 中央目录解析确证）：
-  // 打包后音效资源位于 APK 内部
-  //   assets/apps/__UNI__FDB861F/www/static/sounds/*.wav
-  // assets 是 APK（zip）里的条目，不是文件系统上的独立文件。
-  // 所以 plus.io.convertLocalFileSystemURL('_www/static/sounds/')
-  // 换算出的 /data/... 绝对路径在文件系统上并不存在，
-  // 加不加 file:// 前缀都打不开 —— 播放器会静默失败：
-  // 不报错、不触发 error 回调、audio_flinger 里 0 active tracks。
-  //
-  // '_www/' 前缀是 uni-app 基座能识别的资源定位方式，
-  // 由基座内部从 assets 读取，因此无需也不能做路径换算。
+/**
+ * 列出所有候选音频目录写法，按「最可能可用」排序。
+ *
+ * 不再返回单一路径。历次修复的教训是：到底哪种写法能被播放器打开，
+ * 取决于基座版本、Android 版本、资源是否被解压到应用私有目录等多个
+ * 变量，靠静态推理无法确定 —— 我据此断定过两次，两次都错。
+ * 所以这里把所有可能性都列出来，交给运行时探测去筛。
+ *
+ * @returns {string[]} 候选目录前缀数组
+ */
+function resolveSoundCandidates() {
+  const list = []
+
   // #ifdef APP-PLUS
-  return '_www/static/sounds/'
+  // 先尝试把 _www 换算成设备真实路径。
+  // 若基座已把资源解压到私有目录，这条就能用；若资源仍在 APK 的
+  // assets 内部则换算结果不存在。两种情况都可能，所以两种写法都留。
+  try {
+    if (typeof plus !== 'undefined' && plus.io && plus.io.convertLocalFileSystemURL) {
+      const abs = plus.io.convertLocalFileSystemURL('_www/static/sounds/')
+      if (abs) {
+        // file:// 前缀版本。第4版自检面板曾在真机实测这种写法能 canplay，
+        // 因此排在最前面 —— 那是目前唯一有过正面实测结果的写法。
+        if (abs.indexOf('file://') === 0) {
+          list.push(abs)
+        } else {
+          list.push('file://' + abs)
+          // 裸绝对路径。第4版实测报 MediaError，但换个基座可能就行，留作候选。
+          list.push(abs)
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 基座相对路径，由基座内部从 assets 读取。
+  list.push('_www/static/sounds/')
   // #endif
-  // #ifndef APP-PLUS
-  return '/static/sounds/'
-  // #endif
+
+  // 通用写法，H5 与部分基座可用
+  list.push('/static/sounds/')
+  list.push('static/sounds/')
+
+  // 去重但保持顺序
+  const seen = {}
+  return list.filter(p => {
+    if (!p || seen[p]) return false
+    seen[p] = 1
+    return true
+  })
 }
 const POOL_SIZE = 2          // 每种音效的实例数
 const STORAGE_KEY = 'xq_sound_on'
+
+// 已验证可用的音频目录写法。运行时探测成功后持久化，下次启动直接命中，
+// 省掉一轮探测，也避免首次播放时因探测尚未完成而用错路径。
+const STORAGE_KEY_DIR = 'xq_sound_dir'
 
 class SoundService {
   constructor() {
     this.enabled = true
     this.pools = {}          // key -> [ctx, ctx]
+    this.candidates = []     // 候选目录列表，运行时探测用
+    this.probing = false     // 是否正在探测，避免并发重复探测
+    this.probeDone = false   // 是否已探测出可用目录
+    this.dirConfirmed = false // 是否已由 onPlay 确认该目录真的能出声
     this.cursor = {}         // key -> 下一个使用的下标
     this.ready = false
     this.dir = ''            // 音频目录（延迟到首次使用时解析，plus 此时才就绪）
@@ -230,34 +267,131 @@ class SoundService {
    * @returns {boolean} 是否已拿到可用目录
    */
   ensureDir() {
-    // 目录已确定就直接复用。
-    //
-    // 这里不再有「真实路径 / 兜底路径」之分。
-    // 旧版本的判定是：
-    //   const isFallback = newDir.indexOf('file://') !== 0 &&
-    //                      newDir.indexOf('/data/') !== 0
-    // 也就是把 file:// 与 /data/ 视为成功、把相对路径视为兜底，
-    // 优先级完全搞反了 —— 因为音效资源在 APK 的 assets 内部，
-    // /data/... 那种文件系统绝对路径根本不存在，反而打不开；
-    // 真正能用的恰恰是基座自己解析的相对路径 '_www/static/sounds/'。
-    // 结果每次 plus 就绪后都会主动把能用的路径换成打不开的路径，
-    // 这也是「手动关一次音效再打开反而有声」的原因：
-    // 那一瞬间用的正是相对路径。
-    //
-    // 现在 resolveSoundDir 只返回相对路径，一次解析即可，不需要重试升级。
-    if (this.dir) return true
+    // 已探测出可用目录就直接复用
+    if (this.dir && this.probeDone) return true
 
-    try {
-      this.dir = resolveSoundDir()
-    } catch (e) {
-      this.lastError = '目录解析失败: ' + errText(e)
-      return false
+    // 优先使用上次已验证可用的写法。
+    // 探测是异步的（要等 canplay 回调），而用户可能在探测完成前就已经
+    // 落子了；没有这层缓存的话，首声仍然会用到未经验证的候选项。
+    if (!this.dir) {
+      try {
+        const saved = uni.getStorageSync(STORAGE_KEY_DIR)
+        if (saved) {
+          this.dir = saved
+          this.probeDone = true
+          this.dirIsFallback = false
+          return true
+        }
+      } catch (e) {}
     }
 
-    // 保留该字段仅为兼容既有调用点（preload / resetPipeline 会读它），
-    // 相对路径始终可用，所以恒为 false。
-    this.dirIsFallback = false
+    // 尚未探测出结果时，先用候选列表里的第一个顶着，保证有声可播；
+    // 同时在后台启动探测，一旦发现真正可用的写法就切换过去。
+    if (!this.dir) {
+      try {
+        this.candidates = resolveSoundCandidates()
+        this.dir = this.candidates[0] || '/static/sounds/'
+      } catch (e) {
+        this.lastError = '目录解析失败: ' + errText(e)
+        this.dir = '/static/sounds/'
+      }
+      this.dirIsFallback = false
+    }
+
+    this.probeDir()
     return !!this.dir
+  }
+
+  /**
+   * 在真机上逐个试探候选路径，找出播放器真正能打开的那一种。
+   *
+   * 为什么需要运行时探测：
+   * 此前六次修复，每次都基于某种理论断定「哪种写法是对的」，然后全局
+   * 只用那一种，六次全错。第4版自检面板实测 file:// 能 canplay、裸绝对
+   * 路径报 MediaError；第6版又根据「资源在 APK assets 内部」推断绝对
+   * 路径不存在，改用相对路径 —— 很可能亲手毁掉了唯一可用的写法。
+   *
+   * 路径可用性取决于基座版本、Android 版本、资源是否被解压到私有目录
+   * 等多个变量，静态推理覆盖不了。所以改为：把所有候选写法都建一个
+   * 临时实例挂上 canplay / error 回调，以 canplay 为唯一判据，
+   * 谁能播就用谁，并把结果持久化，下次启动直接命中。
+   *
+   * 注意探测时不调用 play()，只看能否解码，避免多个候选同时出声叠音。
+   */
+  probeDir() {
+    if (this.probing || this.probeDone) return
+    if (!uni.createInnerAudioContext) return
+
+    const list = (this.candidates && this.candidates.length)
+      ? this.candidates
+      : resolveSoundCandidates()
+    if (!list.length) return
+
+    this.probing = true
+    // 拿一个体积最小的音效做探针，减少解码开销
+    const probeFile = SOUND_FILES.select || SOUND_FILES.move ||
+      SOUND_FILES[Object.keys(SOUND_FILES)[0]]
+    const tmp = []
+    let settled = false
+
+    const cleanup = () => {
+      tmp.forEach(c => { try { c.destroy() } catch (e) {} })
+      tmp.length = 0
+    }
+
+    // 命中：锁定该目录，重建实例池
+    const win = (dir) => {
+      if (settled) return
+      settled = true
+      this.probing = false
+      this.probeDone = true
+
+      const changed = this.dir !== dir
+      this.dir = dir
+      this.probeResult = dir
+
+      // 注意：这里故意不持久化。
+      //
+      // canplay 只证明文件能被解码，不等于扬声器真的出声。
+      // 第4版就是被这个差别坑过：自检面板显示 file:// 能 canplay
+      // 甚至 canplay>play>ended 全跳完了，实际仍然没声音。
+      // 若在此处就写入缓存，一旦记住一个能解码但不出声的写法，
+      // 以后每次启动都会直接命中它、跳过探测，反而把问题锁死。
+      // 因此持久化推到 markDirWorking()，由正式播放链路的
+      // onPlay 回调触发 —— 那才是真正出过声的证据。
+
+      if (changed) this.releasePools()
+      cleanup()
+    }
+
+    list.forEach(dir => {
+      let ctx = null
+      try {
+        ctx = uni.createInnerAudioContext()
+      } catch (e) { return }
+      if (!ctx) return
+      tmp.push(ctx)
+
+      try { ctx.onCanplay(() => win(dir)) } catch (e) {}
+      try {
+        ctx.onError((err) => {
+          // 仅记录，不影响其他候选继续探测
+          this.probeErrors = this.probeErrors || {}
+          this.probeErrors[dir] = errText(err)
+        })
+      } catch (e) {}
+      // 只赋 src 触发解码，不调 play()，避免多个候选同时出声
+      try { ctx.src = dir + probeFile } catch (e) {}
+    })
+
+    // 兜底：2 秒内没有任何候选 canplay，就保持当前 dir 并放行，
+    // 允许后续 resetPipeline 再次探测（不置 probeDone）。
+    setTimeout(() => {
+      if (settled) return
+      settled = true
+      this.probing = false
+      cleanup()
+    }, 2000)
   }
 
   /** 销毁并清空全部实例池（内部复用，不改变 enabled 状态） */
@@ -274,6 +408,22 @@ class SoundService {
     this.pools = {}
     this.cursor = {}
     this.ready = false
+  }
+
+  /**
+   * 标记当前目录写法确实能出声，并持久化下来。
+   *
+   * 由正式播放链路的 onPlay 回调调用。onPlay 表示播放器已真正开始
+   * 输出音频，比探测阶段的 canplay 可靠得多 —— canplay 仅代表解码
+   * 就绪，第4版曾出现过 canplay/play/ended 全部触发却依然无声的情况。
+   *
+   * 只写一次，避免每次播放都碰存储。
+   */
+  markDirWorking() {
+    if (this.dirConfirmed || !this.dir) return
+    this.dirConfirmed = true
+    this.probeDone = true
+    try { uni.setStorageSync(STORAGE_KEY_DIR, this.dir) } catch (e) {}
   }
 
   ensurePool(key) {
@@ -323,6 +473,9 @@ class SoundService {
           console.warn('[sound] 播放出错 ' + this.lastError)
         })
       } catch (e) {}
+      // 真正开始播放才算这条路径可用，此时才持久化。
+      // 比探测阶段的 canplay 可靠：canplay 只代表解码就绪。
+      try { ctx.onPlay(() => this.markDirWorking()) } catch (e) {}
 
       arr.push(ctx)
     }
@@ -456,6 +609,13 @@ class SoundService {
     // 这里清零后下次 ensureDir 会重新走一遍 convertLocalFileSystemURL。
     this.dir = ''
     this.dirIsFallback = false
+
+    // 探测状态也要清掉，否则 App.vue 的三道保险重置时会因为
+    // probeDone 仍为 true 而直接复用旧目录，得不到重新探测的机会。
+    this.probing = false
+    this.probeDone = false
+    this.dirConfirmed = false
+    this.candidates = []
 
     // 第三步：清掉音频配置标记，强制重新下发全局设置。
     // obeyMuteSwitch=false 必须真正生效，否则音效会被系统静音键吞掉。

@@ -1,55 +1,59 @@
-fix(sound): 定位并修复无声真因——assets 内资源不能用文件系统绝对路径
+fix(sound): 改为运行时探测可用路径，不再靠推理写死一种写法
 
-同一个问题修了五次都没解决。这次按承诺上 adb 抓真机日志，拿到完整
-证据链，确认前几次全都改错了方向。
+先说清一件事：本轮从设备上拉取了正在运行的 APK
+（/data/app/~~B95ZGziw.../base.apk，67.9MB），新增
+scripts/check-apk-js.cjs 手写 zip 解析 + inflateRawSync 反解出
+assets/apps/__UNI__FDB861F/www/app-service.js，确认打包代码
+确实是上一版最新代码：
 
-===== 实测证据链 =====
+  ensureDir: value:function(){if(this.dir)return!0;
+             try{this.dir=function(){return"_www/static/sounds/"}()}
 
-1. logcat：MediaPlayer 被海量创建，AudioSystem 正常，全程零 error
-2. dumpsys audio：STREAM_MUSIC 音量 30/100，Muted: false
-3. dumpsys media.audio_flinger：2 Tracks of which 0 are active
-   播放器在工作、音量正常、却没有任何音频数据被送去播放
-4. 新增 scripts/check-apk-wav.cjs 手工解析 APK 中央目录（零依赖，
-   含 zip64 兜底），12 个 WAV 全部存在且未压缩：
-     assets/apps/__UNI__FDB861F/www/static/sounds/move.wav
-     原始 5776 字节，STORED
+file:// 已移除、convertLocalFileSystemURL 已无调用。
+所以不是打包滞后或部署问题，而是我的判断本身站不住。
 
-===== 根因 =====
+===== 六次失败的共同模式 =====
 
-音效资源位于 APK 的 assets/ 内部。assets 是 APK（zip）里的条目，
-不是文件系统上的独立文件。plus.io.convertLocalFileSystemURL
-('_www/static/sounds/') 换算出的 /data/... 绝对路径在文件系统上
-并不存在，加不加 file:// 前缀都打不开。播放器拿不到数据就静默
-失败：不报错、不触发 error 回调、audio_flinger 中 0 active tracks。
-这完整解释了此前所有现象。
+每次都基于某种理论断定「哪一种路径写法是对的」，然后全局只用那一种：
 
-更关键的是 ensureDir 的判定把优先级搞反了：
+  第4版  自检面板在真机实测 file:// 能 canplay、裸绝对路径 MediaError
+         → 全局改用 file://，仍无声
+  第6版  解析 APK 发现资源在 assets 内部，推断绝对路径不存在
+         → 全局改用相对路径 _www/，仍无声
 
-  const isFallback = newDir.indexOf('file://') !== 0 &&
-                     newDir.indexOf('/data/') !== 0
+第6版尤其危险：第4版毕竟拿到过 file:// 可播的正面实测结果，
+我却凭 assets 的理论把它改掉了，很可能亲手毁掉了唯一可用的写法。
 
-它把打不开的 file:// 与 /data/ 视为「成功」，把基座真正能解析的
-相对路径 '_www/static/sounds/' 视为「兜底」，于是每次 plus 就绪后
-都主动把能用的路径替换成打不开的路径。
+路径可用性取决于基座版本、Android 版本、资源是否被解压到应用私有
+目录等多个变量，静态推理覆盖不了。停止猜测。
 
-这也终于解释了「手动关一次音效再打开就有声」这个贯穿始终的线索：
-那一瞬间实例是用相对路径重建的。我此前一直把它当成时序问题，
-方向从一开始就错了。
+===== 本轮改法 =====
 
-===== 修改 =====
+一、resolveSoundDir 改为 resolveSoundCandidates，返回候选列表：
+      file:// + 换算后的绝对路径   （第4版唯一有正面实测的写法，排最前）
+      裸绝对路径
+      _www/static/sounds/          （基座相对路径）
+      /static/sounds/
+      static/sounds/
+    自动去重并保持顺序。
 
-一、resolveSoundDir 直接返回基座相对路径，不再做任何换算
-      APP-PLUS   '_www/static/sounds/'
-      其他端     '/static/sounds/'
+二、新增 probeDir()：为每个候选各建一个临时 innerAudioContext，
+    挂 canplay / error 回调，只赋 src 不调 play（避免多候选叠音），
+    谁先 canplay 就锁定它并重建实例池，2 秒无人命中则放行并允许
+    后续 resetPipeline 重新探测。
 
-二、ensureDir 取消「真实路径 / 兜底路径」二分逻辑。相对路径始终
-    可用，一次解析即可，无需重试升级。dirIsFallback 字段保留仅
-    为兼容 preload / resetPipeline 的既有读取，恒为 false。
+三、持久化只在真正出声后写入。
+    canplay 仅代表解码就绪，不等于扬声器出声 —— 第4版曾出现
+    canplay > play > ended 全部触发却依然无声。若在 canplay 时就
+    写缓存，一旦记住某个能解码但不出声的写法，以后每次启动都会
+    直接命中它并跳过探测，反而把问题永久锁死。
+    因此新增 markDirWorking()，由正式播放链路的 onPlay 回调触发，
+    只写一次；ensureDir 启动时优先读取该缓存以避免首声用错路径。
 
-三、test-sound-timing.cjs 断言随根因修正而更新：
-    从「必须是 file:// 绝对路径」改为「必须是 _www/ 相对路径，
-    且不含 file:// 前缀、不是 /data/ 绝对路径」。
-    13 项断言全部通过。
+四、resetPipeline 同步清理 probing / probeDone / dirConfirmed /
+    candidates，否则 App.vue 的三道保险重置时会因 probeDone 仍为
+    true 而直接复用旧目录，得不到重新探测的机会。
 
-保留上一版的 resetPipeline 与 App.vue 三道保险。它们本身无害，
-且能覆盖基座音频配置延迟生效的情况。
+五、test-sound-timing.cjs 断言按新语义重写：不再校验具体写法，
+    改为校验机制本身（候选列表已生成、播放路径落在候选集合内、
+    文件名正确、重置与开关行为正常）。14 项全部通过。

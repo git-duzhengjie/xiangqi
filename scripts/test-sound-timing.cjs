@@ -1,18 +1,17 @@
 /**
- * 验证音效链路在各种启动时序下都能正常出声。
+ * 验证音效链路在各种启动时序下都能正常建池并播放。
  *
- * 断言标准已随根因修正而更新。
+ * 断言标准随设计变更而更新：不再校验某一种具体路径写法。
  *
- * adb 实测确证：打包后音效资源位于 APK 内部
- *   assets/apps/__UNI__FDB861F/www/static/sounds/*.wav
- * assets 是 APK（zip）条目，不是文件系统上的独立文件，因此
- * plus.io.convertLocalFileSystemURL 换算出的 /data/... 绝对路径
- * 根本不存在，加 file:// 前缀同样打不开，播放器会静默失败
- * （零 error、audio_flinger 中 0 active tracks）。
+ * 原因：此前六次修复，每次都基于某种理论断定「哪种写法是对的」，
+ * 然后全局只用那一种 —— 第4版断定必须带 file:// 前缀，
+ * 第6版又根据「资源在 APK assets 内部」断定必须用相对路径，
+ * 两次都没解决问题。本轮已从设备拉取 APK 反解 app-service.js，
+ * 确认打包代码确实是最新版，所以不是部署问题，是判断本身站不住。
  *
- * 所以正确的路径形式是基座能识别的相对路径 '_www/static/sounds/'，
- * 由基座自己从 assets 读取。本测试据此断言：
- * 无论 plus 何时就绪，播放用的 src 都必须是该相对路径。
+ * 现在改为运行时并行探测所有候选写法，以能否真正播放为唯一判据，
+ * 因此测试只校验机制：候选列表是否生成、播放是否拿到候选中的路径、
+ * 文件名是否正确、重置与开关行为是否正常。
  */
 const fs = require('fs');
 const SRC = fs.readFileSync('app/utils/sound.js', 'utf8');
@@ -92,10 +91,19 @@ console.log('===== 场景 1：plus 延迟就绪（本次故障场景）=====');
   const afterSrc = env.played[0] || '(无)';
   console.log('  重置后播放: ' + afterSrc);
 
-  // assets 内资源必须用基座相对路径，不能是 file:// 或 /data/ 绝对路径
-  check('播放路径是基座相对路径 _www/', afterSrc.indexOf('_www/static/sounds/') === 0);
-  check('播放路径不含 file:// 前缀', afterSrc.indexOf('file://') !== 0);
-  check('播放路径不是 /data/ 绝对路径', afterSrc.indexOf('/data/') !== 0);
+  // 不再断言某一种具体写法。
+  //
+  // 历次修复的教训：到底哪种路径能被播放器打开，取决于基座版本、
+  // Android 版本、资源是否被解压到私有目录等多个变量。我先后断定过
+  // 「必须带 file://」和「必须是相对路径」，两次都错。
+  // 现在改为运行时并行探测所有候选、以能否播放为唯一判据，
+  // 所以测试也只校验机制本身：有路径、在候选集合内、文件名正确。
+  const cands = env.sound.candidates || [];
+  check('已生成候选路径列表', cands.length > 0);
+  check('播放时拿到了非空路径', afterSrc.length > 0);
+  check('播放路径以候选目录之一开头',
+    cands.some(c => afterSrc.indexOf(c) === 0));
+  check('播放路径指向正确的文件名', /move\.wav$/.test(afterSrc));
   check('重置后 dirIsFallback 为 false', env.sound.dirIsFallback === false);
   check('重置后 ready 为 true', env.sound.ready === true);
   check('音频配置最终设置成功', env.optionCalls.some(c => c.indexOf('ok:') === 0));
@@ -113,7 +121,7 @@ console.log('===== 场景 2：resetPipeline 幂等性（会被调 3 次）====='
   env.played.length = 0;
   env.sound.play('move');
   check('连续重置 3 次后依然有声', env.played.length > 0);
-  check('路径依然是相对路径', (env.played[0] || '').indexOf('_www/static/sounds/') === 0);
+  check('路径依然指向正确文件', /move\.wav$/.test(env.played[0] || ''));
 }
 
 console.log('');

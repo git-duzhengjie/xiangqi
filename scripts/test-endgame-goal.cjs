@@ -128,9 +128,25 @@ console.log('===== 场景 6：残局库数据完整性 =====');
   check('所有残局字段完整且红先', allOk, detail);
 
   // 至少要有一个守和类，否则 C 方案（区分目标）等于没实现
+  // 注意：初版这里要求「同时包含取胜类与守和类」，但这个假设是错的。
+  // 数据换成真实古谱名局后该断言失败，因为七星聚会与蚚蚚降龙
+  // 的古谱正解都是和棋：「红方看似有取胜之机，但实际上并非如此，
+  // 稍有不慎便会中招反被黑方将死」。四大江湖名局多为和局，
+  // 这正是它们能成为江湖骗局的原因 —— 路人以为能赢，实则不能。
+  //
+  // 不能为了凑这条测试而自己编一个取胜类局面放进数据库 ——
+  // 那正是上一轮被用户指出的错误。两类目标的判定逻辑
+  // 已由场景 1~3 用构造数据完整验证（不依赖真实局面），
+  // 所以这里改为只校验数据库中 goal 均合法。
   const hasDraw = ENDGAMES.some(e => e.goal === ENDGAME_GOAL.DRAW);
   const hasWin = ENDGAMES.some(e => e.goal === ENDGAME_GOAL.WIN);
-  check('同时包含取胜类与守和类', hasDraw && hasWin);
+  console.log('  守和类: ' + (hasDraw ? '有' : '无') +
+    '，取胜类: ' + (hasWin ? '有' : '无') +
+    '（古谱名局正解多为和棋，无取胜类属正常）');
+  check('至少包含一类目标', hasDraw || hasWin);
+  check('所有局面 goal 均合法',
+    ENDGAMES.every(e => e.goal === ENDGAME_GOAL.WIN ||
+                        e.goal === ENDGAME_GOAL.DRAW));
 }
 
 console.log('');

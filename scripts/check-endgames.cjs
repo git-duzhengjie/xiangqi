@@ -210,6 +210,80 @@ for (const eg of endgames.ENDGAMES) {
     check(eg.name + ': 守和局面黑方有攻击手段', blackMoves.length > 0);
   }
 
+  // ============================================================
+  // 棋理检查（本轮新增，此前完全缺失）
+  //
+  // 之前的校验只管「规则合法」，不管「像不像残局」，于是放过了
+  // 一个离谱的局面：马兵巧胜里红兵摆在 (8,4)，紧贴自己帅 (9,4)，
+  // 而黑将在 (0,3)，隔着 8 行。用户一眼就看出「兵怎么跑到自己
+  // 老王身边了」——那不是走出来的，是我初始 FEN 就那么摆的。
+  //
+  // 更值得记录的是：上一轮 test-endgame-ai 里「马兵巧胜达 120 步
+  // 上限」，我把它解释成「长局，符合残局特性」。那其实正是这个
+  // 问题的信号（攻子离敌将太远，根本攻不到），我又一次把异常
+  // 数据往有利方向解释了。所以这些门槛必须是硬性的，
+  // 不能靠我事后判断。
+  // ============================================================
+
+  const blackKing = { r: Math.floor(kPos / COLS), c: kPos % COLS };
+  const redKing = { r: Math.floor(KPos / COLS), c: KPos % COLS };
+
+  // 收集红方攻击子（不含帅与仕相——它们是防守子，不负责进攻）
+  const attackers = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const p = st.board[r * COLS + c];
+      if (!p || p !== p.toUpperCase()) continue;   // 只看红方
+      const up = p.toUpperCase();
+      if (up === 'K' || up === 'A' || up === 'B') continue;
+      attackers.push({ p: p, r: r, c: c });
+    }
+  }
+  console.log('  红方攻击子: ' +
+    (attackers.map(a => a.p + '(' + a.r + ',' + a.c + ')').join(' ') || '无'));
+
+  // 取胜类残局必须有攻击子，光靠帅仕相是不可能取胜的
+  if (eg.goal === endgames.ENDGAME_GOAL.WIN) {
+    check(eg.name + ': 取胜类有攻击子', attackers.length > 0);
+  }
+
+  // 攻击子必须离黑将足够近。
+  // 用切比雪夫距离（走王步数）衡量：残局的攻子若离敌将 6 行以上，
+  // 等于还没进入战场，那不是残局而是「先走十几步过河」。
+  // 兵尤其明显：红兵越往下（row 越大）越靠自己底线，
+  // 摆在 row 8 意味着它贴着自己帅，离黑将最远。
+  if (eg.goal === endgames.ENDGAME_GOAL.WIN && attackers.length) {
+    const dists = attackers.map(a =>
+      Math.max(Math.abs(a.r - blackKing.r), Math.abs(a.c - blackKing.c)));
+    const minDist = Math.min.apply(null, dists);
+    console.log('  最近攻击子与黑将距离: ' + minDist);
+    check(eg.name + ': 至少一个攻击子已接近黑将（距离<=4）', minDist <= 4,
+      '最近距离 ' + minDist);
+
+    // 单独盯兵：红兵在 row>=7 就是贴着自己帅，绝不该是残局起始形态
+    const badPawns = attackers.filter(a => a.p === 'P' && a.r >= 7);
+    check(eg.name + ': 红兵不在自家阵地深处（row<7）', badPawns.length === 0,
+      badPawns.map(a => 'P@' + a.r + ',' + a.c).join(' '));
+
+    // 攻击子不该紧贴自己的帅（距离<=1），那是防守姿态不是进攻姿态
+    const hugging = attackers.filter(a =>
+      Math.max(Math.abs(a.r - redKing.r), Math.abs(a.c - redKing.c)) <= 1);
+    check(eg.name + ': 攻击子未紧贴自己帅', hugging.length === 0,
+      hugging.map(a => a.p + '@' + a.r + ',' + a.c).join(' '));
+  }
+
+  // 黑方不应是完全的光杆老将（取胜类）。
+  // 光杆将无处可躲，要么秒杀要么长追，都不构成有趣的残局；
+  // 古谱残局黑方几乎总有士象或攻子做抵抗。
+  if (eg.goal === endgames.ENDGAME_GOAL.WIN) {
+    let blackPieces = 0;
+    for (const p of st.board) {
+      if (p && p === p.toLowerCase() && p !== 'k') blackPieces++;
+    }
+    console.log('  黑方除将以外的子数: ' + blackPieces);
+    check(eg.name + ': 黑方不是光杆老将', blackPieces > 0);
+  }
+
   console.log('');
 }
 

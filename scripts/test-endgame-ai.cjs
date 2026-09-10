@@ -103,6 +103,11 @@ const ai = {
     const opp = side === RED ? BLACK : RED;
     if (isKingInCheck(board, opp)) score += 30;
     if (isKingInCheck(board, side)) score -= 30;
+    // 与 game.js 保持一致：行动自由度 + 困死预警
+    const myMoves = genAllLegalMoves(board, side);
+    score += myMoves.length * 8;
+    if (myMoves.length <= 2) score -= 800;
+    if (myMoves.length <= 1) score -= 3000;
     return score;
   }
 };

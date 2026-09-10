@@ -18,6 +18,9 @@ const SRC = fs.readFileSync('app/utils/sound.js', 'utf8');
 
 function build(opts) {
   const played = [];
+  const playedCtx = [];    // 实际调用过 play 的实例
+  const createdCtx = [];   // 所有被创建的实例
+  const destroyCount = { n: 0 };
   const optionCalls = [];
   let plusReady = opts.plusReadyAtStart;
   let optionWorks = opts.optionWorksAtStart;
@@ -40,13 +43,21 @@ function build(opts) {
       }
       optionCalls.push('ok:obeyMuteSwitch=' + cfg.obeyMuteSwitch);
     },
-    createInnerAudioContext: () => ({
-      _src: '', loop: false, autoplay: false, volume: 1, obeyMuteSwitch: true,
-      set src(v) { this._src = v; }, get src() { return this._src; },
-      play() { played.push(this._src); },
-      stop() {}, destroy() {}, seek() {},
-      onError() {}, onCanplay() {}, onPlay() {}, onEnded() {}
-    })
+    createInnerAudioContext: () => {
+      const ctx = {
+        _src: '', loop: false, autoplay: false, volume: 1, obeyMuteSwitch: true,
+        _destroyed: false,
+        _endedCb: null,
+        set src(v) { this._src = v; }, get src() { return this._src; },
+        play() { played.push(this._src); playedCtx.push(ctx); },
+        stop() {}, seek() {},
+        destroy() { this._destroyed = true; destroyCount.n++; },
+        onError() {}, onCanplay() {}, onPlay() {},
+        onEnded(cb) { ctx._endedCb = cb; }
+      };
+      createdCtx.push(ctx);
+      return ctx;
+    }
   };
 
   const code = SRC.replace(/export default new SoundService\(\)/, 'module.exports = new SoundService()');
@@ -57,6 +68,9 @@ function build(opts) {
   return {
     sound: mod.exports,
     played,
+    playedCtx,
+    createdCtx,
+    destroyCount,
     optionCalls,
     makeReady: () => { plusReady = true; optionWorks = true; }
   };
@@ -153,6 +167,48 @@ console.log('===== 场景 4：plus 始终不就绪（不能崩）=====');
     env.sound.play('move');
   } catch (e) { crashed = true; console.log('  异常: ' + e.message); }
   check('不抛异常', !crashed);
+}
+
+console.log('');
+console.log('===== 场景 5：实例现建现销（本次根因）=====');
+{
+  const env = build({ plusReadyAtStart: true, optionWorksAtStart: true });
+
+  // preload 不应该预建任何【留待复用的播放实例】。
+  //
+  // 旧实现会在这里建好 12 个音效 x 2 = 24 个实例常驻池中，它们闲置
+  // 十几秒后底层 MediaPlayer 已失效，play() 便静默无效 —— 这正是
+  // 「关一次音效再开就正常」的原因：手动关开使实例变成现用现造。
+  //
+  // 注意 preload 会调 probeDir 为每个候选路径建临时探测实例，
+  // 那些实例 2 秒内就销毁、不参与播放，属于正常行为，不能算预建。
+  // 所以判据不是「创建数为 0」，而是「没有实例被 play 过」，
+  // 以及后面验证的「每次播放都新建、不复用」。
+  env.sound.preload();
+  const probeCount = env.createdCtx.length;
+  console.log('  preload 后创建的探测实例数: ' + probeCount + '（均为临时探测，2秒内销毁）');
+  check('preload 未播放任何实例', env.playedCtx.length === 0);
+  const afterPreload = env.createdCtx.length;
+
+  // 第一次播放：应当现场新建实例
+  env.sound.play('move');
+  const after1 = env.createdCtx.length;
+  console.log('  第一次 play 后已创建实例数: ' + after1);
+  check('play 时现场创建实例', after1 > afterPreload);
+  check('新建的实例确实被 play', env.playedCtx.length === 1);
+
+  // 模拟播放结束，实例应被销毁
+  const c1 = env.playedCtx[0];
+  if (c1 && c1._endedCb) c1._endedCb();
+  console.log('  ended 后 destroy 次数: ' + env.destroyCount.n);
+  check('播完立即销毁实例', c1 && c1._destroyed === true);
+
+  // 第二次播放：必须是全新实例，不能复用第一个
+  env.sound.play('move');
+  const c2 = env.playedCtx[1];
+  console.log('  第二次 play 是否复用旧实例: ' + (c1 === c2));
+  check('第二次播放不复用旧实例', c1 !== c2);
+  check('每次播放都新建实例', env.createdCtx.length > after1);
 }
 
 console.log('');

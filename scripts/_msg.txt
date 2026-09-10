@@ -1,59 +1,62 @@
-fix(sound): 改为运行时探测可用路径，不再靠推理写死一种写法
+fix(sound): 改为一次性实例，根治首次启动无声
 
-先说清一件事：本轮从设备上拉取了正在运行的 APK
-（/data/app/~~B95ZGziw.../base.apk，67.9MB），新增
-scripts/check-apk-js.cjs 手写 zip 解析 + inflateRawSync 反解出
-assets/apps/__UNI__FDB861F/www/app-service.js，确认打包代码
-确实是上一版最新代码：
+老板一句话点破了七轮的方向错误：「与音频文件无关，因为关闭一次音效
+再开启一次就正常了」。这句话直接排除了我此前全部的努力方向 ——
+文件能播、路径正确、扬声器正常、音量正常、静音开关无关，
+否则手动关开也不可能出声。
 
-  ensureDir: value:function(){if(this.dir)return!0;
-             try{this.dir=function(){return"_www/static/sounds/"}()}
+===== 逐行比对手动关开与 resetPipeline =====
 
-file:// 已移除、convertLocalFileSystemURL 已无调用。
-所以不是打包滞后或部署问题，而是我的判断本身站不住。
+手动关开（有效）：
+  关 -> setEnabled(false) -> stopAll()
+       销毁全部实例、pools = {}、ready = false，且不重建
+  开 -> setEnabled(true)
+       什么都不做，池子依然是空的
+  用户下一次落子（距启动已十几秒）
+       play() -> ensurePool() 现场创建实例 -> 立刻 play()
+       实例创建即播放，寿命只有几毫秒
 
-===== 六次失败的共同模式 =====
+resetPipeline（无效）：
+  清状态 -> preload() 立刻批量建好 12 个音效 x 2 = 24 个实例
+  十几秒后落子 -> play() 复用早已创建好的实例
+       实例已在池中闲置十几秒
 
-每次都基于某种理论断定「哪一种路径写法是对的」，然后全局只用那一种：
+差异不在路径、不在音频配置、也不在执行时机，而在【实例是否被复用】。
+预先创建的 innerAudioContext 闲置十几秒后，其底层 MediaPlayer 已被
+系统回收或退出可播状态，但 JS 对象仍在池中，于是 play() 静默失效：
+不报错、不触发任何回调、audio_flinger 中没有 active track。
 
-  第4版  自检面板在真机实测 file:// 能 canplay、裸绝对路径 MediaError
-         → 全局改用 file://，仍无声
-  第6版  解析 APK 发现资源在 assets 内部，推断绝对路径不存在
-         → 全局改用相对路径 _www/，仍无声
+这与之前 adb 实测到的现象完全吻合，也解释了为什么我七次改路径都
+无效 —— MediaPlayer 海量创建、全程零 error、0 active tracks，
+根本不是路径打不开，而是实例已经失效。
 
-第6版尤其危险：第4版毕竟拿到过 file:// 可播的正面实测结果，
-我却凭 assets 的理论把它改掉了，很可能亲手毁掉了唯一可用的写法。
+===== 修改 =====
 
-路径可用性取决于基座版本、Android 版本、资源是否被解压到应用私有
-目录等多个变量，静态推理覆盖不了。停止猜测。
+一、play() 改为一次性实例：每次播放现场新建，播完（ended / error /
+    3 秒超时兜底）立即 destroy。这正是手动关开之后的行为模式，
+    也是本项目唯一被真机验证过有效的模式。
+    实例属性仍逐个独立 try，避免 obeyMuteSwitch 这类只读 getter
+    赋值抛错导致整个实例被丢弃。
+    保持不 stop()、不 seek() —— 新建实例仍在异步 prepare，
+    seek 是非法调用会让播放器进入异常态；一次性实例天然从头播放。
 
-===== 本轮改法 =====
+二、preload() 不再预建实例，只做目录探测，避免首次落子时才开始
+    探测而错过第一声。
 
-一、resolveSoundDir 改为 resolveSoundCandidates，返回候选列表：
-      file:// + 换算后的绝对路径   （第4版唯一有正面实测的写法，排最前）
-      裸绝对路径
-      _www/static/sounds/          （基座相对路径）
-      /static/sounds/
-      static/sounds/
-    自动去重并保持顺序。
+三、删除 ensurePool 与 POOL_SIZE。它是本次故障的根源实现，
+    改完后已无调用点，必须删掉，否则日后很容易被当作「性能优化」
+    重新启用而再次踩坑。pools / cursor 字段保留，仅供
+    stopAll / destroy / releasePools 的既有清理逻辑使用。
 
-二、新增 probeDir()：为每个候选各建一个临时 innerAudioContext，
-    挂 canplay / error 回调，只赋 src 不调 play（避免多候选叠音），
-    谁先 canplay 就锁定它并重建实例池，2 秒无人命中则放行并允许
-    后续 resetPipeline 重新探测。
+四、test-sound-timing.cjs 新增场景 5 专门覆盖实例生命周期：
+    preload 未播放任何实例、play 时现场创建、播完立即销毁、
+    第二次播放不复用旧实例、每次播放都新建。
 
-三、持久化只在真正出声后写入。
-    canplay 仅代表解码就绪，不等于扬声器出声 —— 第4版曾出现
-    canplay > play > ended 全部触发却依然无声。若在 canplay 时就
-    写缓存，一旦记住某个能解码但不出声的写法，以后每次启动都会
-    直接命中它并跳过探测，反而把问题永久锁死。
-    因此新增 markDirWorking()，由正式播放链路的 onPlay 回调触发，
-    只写一次；ensureDir 启动时优先读取该缓存以避免首声用错路径。
+    这里也补上了此前测试的盲区：原有 14 项断言全部通过却完全测不到
+    本次故障，因为它们只检查路径与开关状态，从不检查实例生命周期。
+    这正是我七轮都没定位到根因的原因之一。
 
-四、resetPipeline 同步清理 probing / probeDone / dirConfirmed /
-    candidates，否则 App.vue 的三道保险重置时会因 probeDone 仍为
-    true 而直接复用旧目录，得不到重新探测的机会。
+    注：探测实例（probeDir 为每个候选各建一个）2 秒内即销毁、
+    不参与播放，不属于预建，断言据此区分。
 
-五、test-sound-timing.cjs 断言按新语义重写：不再校验具体写法，
-    改为校验机制本身（候选列表已生成、播放路径落在候选集合内、
-    文件名正确、重置与开关行为正常）。14 项全部通过。
+20 项断言全部通过。

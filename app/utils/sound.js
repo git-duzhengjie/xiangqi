@@ -127,7 +127,6 @@ function resolveSoundCandidates() {
     return true
   })
 }
-const POOL_SIZE = 2          // 每种音效的实例数
 const STORAGE_KEY = 'xq_sound_on'
 
 // 已验证可用的音频目录写法。运行时探测成功后持久化，下次启动直接命中，
@@ -137,7 +136,9 @@ const STORAGE_KEY_DIR = 'xq_sound_dir'
 class SoundService {
   constructor() {
     this.enabled = true
-    this.pools = {}          // key -> [ctx, ctx]
+    // 实例改为播放时现建现销，这两个字段已不再用于复用，
+    // 仅为兼容 stopAll / destroy / releasePools 的既有清理逻辑而保留。
+    this.pools = {}
     this.candidates = []     // 候选目录列表，运行时探测用
     this.probing = false     // 是否正在探测，避免并发重复探测
     this.probeDone = false   // 是否已探测出可用目录
@@ -180,29 +181,18 @@ class SoundService {
    * 只是第一声可能有轻微延迟。
    */
   preload() {
-    // 已经用真实路径预热过就不用再来一遍。
+    // 只做目录探测，不再预先创建任何实例。
     //
-    // 注意这里的条件不能只写 if (this.ready) return。
-    // 对局页 onLoad 会先调一次 preload，那时 plus 往往还没就绪，
-    // 只能拿到兜底路径，但 ready 已被置成 true；随后 App.vue 里
-    // plusready 触发的预热就会在第一行直接早退，等于白加。
-    // 所以必须把"路径是否还停留在兜底状态"一起纳入判断：
-    // 只要还在用兜底路径，就允许再预热一次。
-    if (this.ready && !this.dirIsFallback) return
-
+    // 旧版本会在这里把 12 个音效 x 2 个实例全部建好，本意是减少首次
+    // 播放延迟，实际却是无声的根因：实例在池中闲置十几秒后底层
+    // MediaPlayer 已失效，play() 静默无效。详见 play() 内的说明。
+    //
+    // 现在实例改为播放时现建现销，这里只需把可用的目录写法探测出来，
+    // 避免首次落子时才开始探测而错过第一声。
     this.applyAudioOption()
-
-    // 先把目录敲定，再决定要不要建池。
-    // ensureDir 内部会在路径从兜底升级为真实路径时清空旧池，
-    // 于是下面的 ensurePool 会用新路径重建。
-    this.ensureDir()
-
     try {
-      Object.keys(SOUND_FILES).forEach(key => this.ensurePool(key))
-      // 只有拿到真实路径时才算预热完成。
-      // 仍是兜底路径的话保持 ready = false，留给后续的 plusready
-      // 回调或首次 play 再重试，避免被永久锁死在错误路径上。
-      this.ready = !this.dirIsFallback
+      this.ensureDir()
+      this.ready = true
     } catch (e) {
       this.lastError = 'preload: ' + errText(e)
       console.warn('[sound] preload 失败:', e)
@@ -426,66 +416,6 @@ class SoundService {
     try { uni.setStorageSync(STORAGE_KEY_DIR, this.dir) } catch (e) {}
   }
 
-  ensurePool(key) {
-    const file = SOUND_FILES[key]
-    if (!file) return null
-
-    // 创建任何实例前，先确保全局音频配置已生效
-    this.applyAudioOption()
-
-    // 关键顺序：目录检查必须在"池已存在就早退"之前。
-    // 若此刻 plus 刚就绪、路径从兜底升级为真实路径，ensureDir 会顺带
-    // 把旧池子清掉，下面的早退自然失效，于是用新路径重建。
-    this.ensureDir()
-    if (!this.dir) return null
-
-    if (this.pools[key]) return this.pools[key]
-
-    const arr = []
-    for (let i = 0; i < POOL_SIZE; i++) {
-      let ctx = null
-      try {
-        ctx = uni.createInnerAudioContext()
-      } catch (e) {
-        // 必须把异常存下来。之前这里只有 console.warn，而正式包会剥离 console，
-        // 导致自检弹窗显示"创建失败"但"最近错误: 无"，真正原因被吞得一干二净。
-        this.lastError = '创建' + key + '失败: ' + errText(e)
-        continue
-      }
-
-      // 属性逐个隔离赋值。
-      // ES 模块是严格模式，给只读属性赋值会直接抛 TypeError 而非静默忽略；
-      // 原先四个赋值和 createInnerAudioContext 共用一个 try，任意一个抛错都会
-      // 让整个实例被丢弃，最终表现为"实例池 0 种"，却看不出是哪一步的问题。
-      // 拆开之后，即便某个属性不被当前基座支持，实例本身仍然可用。
-      try { ctx.src = this.dir + file } catch (e) { this.lastError = 'src: ' + errText(e) }
-      try { ctx.loop = false } catch (e) {}
-      try { ctx.autoplay = false } catch (e) {}
-      // 这里不再给 ctx.obeyMuteSwitch 赋值：自检已证实它在本基座上只有 getter，
-      // 赋值必然抛错。改由 applyAudioOption() 通过全局 API 统一设置。
-      // 保留 try 只是为了兼容个别允许写入的平台，失败也不影响后续。
-      try { ctx.obeyMuteSwitch = false } catch (e) {}
-      try { ctx.volume = 1.0 } catch (e) {}
-
-      try {
-        ctx.onError((err) => {
-          this.lastError = key + ': ' + (err && (err.errMsg || err.errCode || JSON.stringify(err)))
-          console.warn('[sound] 播放出错 ' + this.lastError)
-        })
-      } catch (e) {}
-      // 真正开始播放才算这条路径可用，此时才持久化。
-      // 比探测阶段的 canplay 可靠：canplay 只代表解码就绪。
-      try { ctx.onPlay(() => this.markDirWorking()) } catch (e) {}
-
-      arr.push(ctx)
-    }
-
-    if (!arr.length) return null
-    this.pools[key] = arr
-    this.cursor[key] = 0
-    return arr
-  }
-
   /* ---------- 播放 ---------- */
 
   /**
@@ -498,36 +428,82 @@ class SoundService {
       console.warn('[sound] 未知音效: ' + key)
       return
     }
+
+    // 每次播放都新建一个一次性实例，播完立即销毁。
+    //
+    // 为什么不用实例池预建（这是本问题的真正根因）：
+    // 老板反馈「关闭一次音效再开启就正常」，而手动关开的实际效果是
+    // stopAll() 清空池子且不重建，于是下一次落子时 ensurePool 现场
+    // 创建实例并立刻 play —— 实例【创建即播放】，寿命仅几毫秒。
+    // 而预建方案会让实例在池中闲置十几秒，其底层 MediaPlayer 已被
+    // 系统回收或退出可播状态，JS 对象却还在，于是 play() 静默失效：
+    // 不报错、不触发任何回调、audio_flinger 中没有 active track。
+    // 实测现象完全吻合：MediaPlayer 被海量创建、全程零 error、
+    // 0 active tracks。
+    //
+    // 所以这里坚持现用现造。innerAudioContext 创建开销很小，
+    // 而可靠性远比复用省下的那点开销重要。
     try {
-      const pool = this.ensurePool(key)
-      if (!pool || !pool.length) return
+      if (!this.ensureDir()) return
+      this.applyAudioOption()
 
-      const idx = this.cursor[key] % pool.length
-      this.cursor[key] = (idx + 1) % pool.length
-      const ctx = pool[idx]
-
-      // 关键：这里既不能 stop()，也不要无条件 seek(0)。
-      //
-      // 1) stop() 会把 Android 底层 MediaPlayer 打到 Stopped 态，必须重新
-      //    prepare() 才能再播，此时 play() 会被静默丢弃。
-      // 2) seek() 同样危险：刚创建的实例还在异步 prepare，尚未进入
-      //    Prepared 态，此时 seek 属于非法调用，会让播放器进入异常状态，
-      //    紧跟着的 play() 同样无声。日志里的表现就是：文件已打开
-      //    （GenericSource: FileSource）、播放器已建好，却始终没有 AudioTrack。
-      //
-      // 正确做法：直接 play()。重头播放靠实例池轮换来保证（同一音效两个
-      // 实例交替用），而不是靠手动重置进度。只有在确实已经播放过、
-      // 确保处于已就绪状态时，重置进度才是安全的。
-      if (ctx.__xqPlayed) {
-        try { ctx.seek(0) } catch (e) {}
+      let ctx = null
+      try {
+        ctx = uni.createInnerAudioContext()
+      } catch (e) {
+        this.lastError = key + ' 创建失败: ' + errText(e)
+        return
       }
-      ctx.__xqPlayed = true
+      if (!ctx) return
+
+      // 属性逐个独立 try。
+      // 历史教训：把创建与多个属性赋值合在一个 try 里，一旦某个属性是
+      // 只读 getter（obeyMuteSwitch 在本基座上就是）赋值抛 TypeError，
+      // 整个实例会被丢弃，表现为实例池恒为空、彻底无声。
+      try { ctx.loop = false } catch (e) {}
+      try { ctx.autoplay = false } catch (e) {}
+      try { ctx.volume = 1.0 } catch (e) {}
+      try { ctx.obeyMuteSwitch = false } catch (e) {}
+
+      // 销毁只执行一次，避免 ended 与超时兜底重复 destroy
+      let disposed = false
+      const dispose = () => {
+        if (disposed) return
+        disposed = true
+        try { ctx.destroy() } catch (e) {}
+      }
+
+      try { ctx.onEnded(dispose) } catch (e) {}
+      try {
+        ctx.onError((err) => {
+          this.lastError = key + ': ' + errText(err)
+          console.warn('[sound] 播放出错 ' + this.lastError)
+          dispose()
+        })
+      } catch (e) {}
+      // onPlay 表示真正开始输出音频，此时才确认该路径写法可用并持久化。
+      // 比探测阶段的 canplay 可靠得多：canplay 只代表解码就绪。
+      try { ctx.onPlay(() => this.markDirWorking()) } catch (e) {}
+
+      // 兜底销毁：某些情况下 ended 不会触发（如文件损坏、播放被打断），
+      // 不兜底会导致原生 MediaPlayer 泄漏。
+      // 3 秒足够覆盖最长的音效（最长约 1.4 秒）。
+      setTimeout(dispose, 3000)
+
+      try { ctx.src = this.dir + SOUND_FILES[key] } catch (e) {
+        this.lastError = key + ' 设置 src 失败: ' + errText(e)
+        dispose()
+        return
+      }
+
+      // 直接 play()，不 stop()、不 seek()。
+      // 新建实例仍在异步 prepare，seek 属于非法调用，会让播放器进入
+      // 异常态，紧跟的 play() 同样无声；stop() 会打到 Stopped 态，
+      // 必须重新 prepare 才能播。一次性实例天然从头播放，无需重置进度。
       ctx.play()
-      // 留一条痕迹：无声问题最难的是分不清“没调用”还是“调了没响”，
-      // 有了这行日志，adb logcat 一搜就能区分两者
-      console.log('[sound] play ' + key)
     } catch (e) {
-      console.warn('[sound] play 异常 ' + key + ':', e)
+      this.lastError = key + ' play 异常: ' + errText(e)
+      console.warn('[sound] play 异常', e)
     }
   }
 

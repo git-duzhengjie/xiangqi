@@ -78,22 +78,20 @@ function errText(e) {
 }
 
 function resolveSoundDir() {
+  // 直接返回 uni-app 相对路径，让基座自己去 assets 里取资源。
+  //
+  // 关键事实（已用 adb + APK 中央目录解析确证）：
+  // 打包后音效资源位于 APK 内部
+  //   assets/apps/__UNI__FDB861F/www/static/sounds/*.wav
+  // assets 是 APK（zip）里的条目，不是文件系统上的独立文件。
+  // 所以 plus.io.convertLocalFileSystemURL('_www/static/sounds/')
+  // 换算出的 /data/... 绝对路径在文件系统上并不存在，
+  // 加不加 file:// 前缀都打不开 —— 播放器会静默失败：
+  // 不报错、不触发 error 回调、audio_flinger 里 0 active tracks。
+  //
+  // '_www/' 前缀是 uni-app 基座能识别的资源定位方式，
+  // 由基座内部从 assets 读取，因此无需也不能做路径换算。
   // #ifdef APP-PLUS
-  try {
-    if (typeof plus !== 'undefined' && plus.io && plus.io.convertLocalFileSystemURL) {
-      let abs = plus.io.convertLocalFileSystemURL('_www/static/sounds/')
-      if (abs) {
-        // 确保尾部斜杠
-        if (abs.charAt(abs.length - 1) !== '/') abs += '/'
-        // 确保 file:// 前缀。
-        // plus.io.convertLocalFileSystemURL 返回的是文件系统绝对路径 /data/...，
-        // 但 Android MediaPlayer 有时需要明确的 file:// 协议前缀才能识别为本地文件。
-        // 实测症状：adb 确认文件存在、路径正确、但播放器报 MediaError 无法打开。
-        if (abs.indexOf('file://') !== 0) abs = 'file://' + abs
-        return abs
-      }
-    }
-  } catch (e) {}
   return '_www/static/sounds/'
   // #endif
   // #ifndef APP-PLUS
@@ -232,40 +230,34 @@ class SoundService {
    * @returns {boolean} 是否已拿到可用目录
    */
   ensureDir() {
-    // 已经是真实绝对路径，无需重复解析
-    if (this.dir && !this.dirIsFallback) return true
+    // 目录已确定就直接复用。
+    //
+    // 这里不再有「真实路径 / 兜底路径」之分。
+    // 旧版本的判定是：
+    //   const isFallback = newDir.indexOf('file://') !== 0 &&
+    //                      newDir.indexOf('/data/') !== 0
+    // 也就是把 file:// 与 /data/ 视为成功、把相对路径视为兜底，
+    // 优先级完全搞反了 —— 因为音效资源在 APK 的 assets 内部，
+    // /data/... 那种文件系统绝对路径根本不存在，反而打不开；
+    // 真正能用的恰恰是基座自己解析的相对路径 '_www/static/sounds/'。
+    // 结果每次 plus 就绪后都会主动把能用的路径换成打不开的路径，
+    // 这也是「手动关一次音效再打开反而有声」的原因：
+    // 那一瞬间用的正是相对路径。
+    //
+    // 现在 resolveSoundDir 只返回相对路径，一次解析即可，不需要重试升级。
+    if (this.dir) return true
 
-    let newDir = ''
     try {
-      newDir = resolveSoundDir()
+      this.dir = resolveSoundDir()
     } catch (e) {
       this.lastError = '目录解析失败: ' + errText(e)
-      return !!this.dir
-    }
-    if (!newDir) return !!this.dir
-
-    // 判定是否仍是兜底：真实路径要么带 file:// 前缀，要么是 /data 开头的绝对路径
-    const isFallback = newDir.indexOf('file://') !== 0 && newDir.indexOf('/data/') !== 0
-
-    if (!isFallback) {
-      // plus 已就绪，拿到真实路径
-      const changed = this.dir !== newDir
-      this.dir = newDir
-      this.dirIsFallback = false
-      if (changed) {
-        // 路径变了，旧池子里那些实例的 src 全是错的，必须整体重建。
-        // 这里要真正销毁掉，否则原生层的 MediaPlayer 会泄漏。
-        this.releasePools()
-      }
-      return true
+      return false
     }
 
-    // plus 仍未就绪，先用兜底路径顶着，下次再试
-    if (!this.dir) {
-      this.dir = newDir
-      this.dirIsFallback = true
-    }
-    return true
+    // 保留该字段仅为兼容既有调用点（preload / resetPipeline 会读它），
+    // 相对路径始终可用，所以恒为 false。
+    this.dirIsFallback = false
+    return !!this.dir
   }
 
   /** 销毁并清空全部实例池（内部复用，不改变 enabled 状态） */

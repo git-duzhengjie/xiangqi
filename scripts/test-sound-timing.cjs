@@ -1,10 +1,18 @@
 /**
- * 验证 resetPipeline 能否救回「首次启动无声」。
+ * 验证音效链路在各种启动时序下都能正常出声。
  *
- * 前三次修复都只做静态校验，看着对但上机没声。这里把 uni / plus 桩掉，
- * 严格按真机时序跑：先在 plus 未就绪时 preload（模拟对局页 onLoad），
- * 再在 plus 就绪后调 resetPipeline（模拟 App.vue 的自动重置），
- * 最后断言播放用的是 file:// 真实路径。
+ * 断言标准已随根因修正而更新。
+ *
+ * adb 实测确证：打包后音效资源位于 APK 内部
+ *   assets/apps/__UNI__FDB861F/www/static/sounds/*.wav
+ * assets 是 APK（zip）条目，不是文件系统上的独立文件，因此
+ * plus.io.convertLocalFileSystemURL 换算出的 /data/... 绝对路径
+ * 根本不存在，加 file:// 前缀同样打不开，播放器会静默失败
+ * （零 error、audio_flinger 中 0 active tracks）。
+ *
+ * 所以正确的路径形式是基座能识别的相对路径 '_www/static/sounds/'，
+ * 由基座自己从 assets 读取。本测试据此断言：
+ * 无论 plus 何时就绪，播放用的 src 都必须是该相对路径。
  */
 const fs = require('fs');
 const SRC = fs.readFileSync('app/utils/sound.js', 'utf8');
@@ -61,7 +69,7 @@ function check(label, cond) {
   else { fail++; console.log('  [FAIL] ' + label); }
 }
 
-console.log('===== 场景 1：老板遇到的情况（plus 延迟就绪）=====');
+console.log('===== 场景 1：plus 延迟就绪（本次故障场景）=====');
 {
   const env = build({ plusReadyAtStart: false, optionWorksAtStart: false });
 
@@ -84,7 +92,10 @@ console.log('===== 场景 1：老板遇到的情况（plus 延迟就绪）====='
   const afterSrc = env.played[0] || '(无)';
   console.log('  重置后播放: ' + afterSrc);
 
-  check('重置后拿到 file:// 真实路径', afterSrc.indexOf('file://') === 0);
+  // assets 内资源必须用基座相对路径，不能是 file:// 或 /data/ 绝对路径
+  check('播放路径是基座相对路径 _www/', afterSrc.indexOf('_www/static/sounds/') === 0);
+  check('播放路径不含 file:// 前缀', afterSrc.indexOf('file://') !== 0);
+  check('播放路径不是 /data/ 绝对路径', afterSrc.indexOf('/data/') !== 0);
   check('重置后 dirIsFallback 为 false', env.sound.dirIsFallback === false);
   check('重置后 ready 为 true', env.sound.ready === true);
   check('音频配置最终设置成功', env.optionCalls.some(c => c.indexOf('ok:') === 0));
@@ -102,7 +113,7 @@ console.log('===== 场景 2：resetPipeline 幂等性（会被调 3 次）====='
   env.played.length = 0;
   env.sound.play('move');
   check('连续重置 3 次后依然有声', env.played.length > 0);
-  check('路径依然正确', (env.played[0] || '').indexOf('file://') === 0);
+  check('路径依然是相对路径', (env.played[0] || '').indexOf('_www/static/sounds/') === 0);
 }
 
 console.log('');

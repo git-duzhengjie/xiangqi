@@ -599,7 +599,9 @@ export default {
       setTimeout(() => {
         let best = null
         try {
-          best = this.searchBest(this.board, BLACK, 4)
+          // 旧版固定 4 层。四大名局是 7~8 子的复杂局面，4 层远远不够，
+          // 改为迭代加深：在时限内尽可能往深里搜。
+          best = this.searchIterative(this.board, BLACK, 1200)
         } catch (e) {
           console.warn('[game] 本地搜索异常，降级为随机走法', e)
         }
@@ -614,6 +616,61 @@ export default {
     },
 
     /**
+     * 迭代加深搜索入口。
+     *
+     * 从 2 层开始逐层加深，每完成一层就检查是否超时；
+     * 超时则返回上一层已完成的最优着法（这是迭代加深的核心优势：
+     * 任何时刻中断都有一个完整可用的结果）。
+     *
+     * 至少保证跑完 4 层，避免时限太紧反而比旧版更弱。
+     *
+     * @param {Array} board 当前棋盘
+     * @param {string} side 走子方
+     * @param {number} timeLimit 时间上限（毫秒）
+     */
+    searchIterative(board, side, timeLimit) {
+      const start = Date.now()
+      let best = null
+      const MIN_DEPTH = 4     // 至少搜到 4 层（不低于旧版水平）
+      const MAX_DEPTH = 10
+      for (let d = 2; d <= MAX_DEPTH; d++) {
+        const r = this.searchBest(board, side, d)
+        if (r) best = r
+        const used = Date.now() - start
+        // 已达最低深度且时间用掉一半以上就停：
+        // 下一层的耗时通常是本层的 3~5 倍，硬上会明显卡顿
+        if (d >= MIN_DEPTH && used > timeLimit / 3) break
+      }
+      return best
+    },
+
+    /**
+     * 着法排序（MVV-LVA：最有价值受害者 / 最低价值攻击者）。
+     *
+     * alpha-beta 的剪枝效率高度依赖搜索顺序：先搜到好棋，
+     * 后面的差棋就能大批剪掉。旧版完全不排序，等于把剪枝能力浪费了。
+     * 排序后同等时间内通常能多搜 1~2 层，这是提升棋力最省力的一步。
+     *
+     * 排序依据：优先吃价值高的子，且用价值低的子去吃更好
+     * （用兵吃车远优于用车吃兵）。
+     */
+    sortMoves(moves, board) {
+      const M = { k: 50000, r: 900, c: 450, n: 400, b: 150, a: 150, p: 100 }
+      const scored = moves.map(mv => {
+        const target = board[mv.to.row * COLS + mv.to.col]
+        const attacker = board[mv.from.row * COLS + mv.from.col]
+        let s = 0
+        if (target) {
+          s = (M[target.toLowerCase()] || 0)
+            - (M[attacker.toLowerCase()] || 0) * 0.1
+        }
+        return { mv: mv, s: s }
+      })
+      scored.sort((a, b) => b.s - a.s)
+      return scored.map(x => x.mv)
+    },
+
+    /**
      * 搜索最佳着法。
      * @param {Array} board 当前棋盘
      * @param {string} side  走子方
@@ -621,8 +678,11 @@ export default {
      * @returns {{from,to}|null}
      */
     searchBest(board, side, depth) {
-      const moves = genAllLegalMoves(board, side)
+      let moves = genAllLegalMoves(board, side)
       if (!moves.length) return null
+
+      // 排序后搜索，剪枝效率大幅提升
+      moves = this.sortMoves(moves, board)
 
       let bestScore = -Infinity
       let bestMoves = []
@@ -651,10 +711,16 @@ export default {
       if (!moves.length) {
         return isKingInCheck(board, side) ? -100000 - depth : -50000
       }
-      if (depth <= 0) return this.evalBoard(board, side)
+      // 叶子节点不直接打分，先做静态搜索把兑子过程走完。
+      // 旧版在这里直接 evalBoard，会产生「视野效应」：
+      // 恰好停在兑子中途时，AI 以为自己净赚一子，实际下一手就被吃回。
+      if (depth <= 0) return this.quiesce(board, side, alpha, beta, 0)
+
+      // 深层节点也排序。浅层（depth 1）排序收益小于开销，故跳过。
+      const ordered = depth > 1 ? this.sortMoves(moves, board) : moves
 
       let best = -Infinity
-      for (const mv of moves) {
+      for (const mv of ordered) {
         const nb = applyMoveToBoard(board, mv.from, mv.to)
         const sc = -this.alphaBeta(nb, side === RED ? BLACK : RED,
           depth - 1, -beta, -alpha)
@@ -663,6 +729,98 @@ export default {
         if (alpha >= beta) break        // 剪枝
       }
       return best
+    },
+
+    /**
+     * 静态搜索：只继续搜索吃子着法，直到局面安静为止。
+     *
+     * 为什么必须有：主搜索到达指定深度就停下来打分，如果那一刻
+     * 正在兑子中途（我方刚吃掉对方车，对方下一手就能吃回我方车），
+     * 评估结果会严重偏离真实价值 —— 这就是「视野效应」。
+     * 残局子力少，一次这样的误判往往直接输掉。
+     *
+     * depth 限制：静态搜索理论上会自然收敛（吃子着法有限），
+     * 但极端局面下可能很深，故加 6 层上限保护，防止手机上卡死。
+     */
+    quiesce(board, side, alpha, beta, qd) {
+      // stand-pat：不吃子（保持现状）的评分作为下限。
+      // 因为走子方总可以选择不进行兑换。
+      const standPat = this.evalBoard(board, side)
+      if (standPat >= beta) return beta
+      if (standPat > alpha) alpha = standPat
+
+      // 上限保护：静态搜索通常几层内收敛，超过 6 层直接返回
+      if (qd >= 6) return alpha
+
+      const moves = genAllLegalMoves(board, side)
+      if (!moves.length) {
+        return isKingInCheck(board, side) ? -100000 : -50000
+      }
+
+      // 只保留吃子着法
+      const captures = []
+      for (const mv of moves) {
+        if (board[mv.to.row * COLS + mv.to.col]) captures.push(mv)
+      }
+      if (!captures.length) return alpha
+
+      const ordered = this.sortMoves(captures, board)
+      for (const mv of ordered) {
+        const nb = applyMoveToBoard(board, mv.from, mv.to)
+        const sc = -this.quiesce(nb, side === RED ? BLACK : RED,
+          -beta, -alpha, qd + 1)
+        if (sc >= beta) return beta
+        if (sc > alpha) alpha = sc
+      }
+      return alpha
+    },
+
+    /**
+     * 位置价值加成。
+     *
+     * 旧版评估只数子力，AI 不知道「车占中线远强于窝在角落」，
+     * 于是在子力相等的所有走法里随机选一个，走出来毫无棋理。
+     *
+     * 这里给出各类子的位置偏好（象棋常识）：
+     *   兵卒：过河才有攻击力，越深入越值钱
+     *   马  ：边马是弱马，应往中心跳
+     *   车  ：占中路与要道
+     *   炮  ：需要开阔直线
+     * 返回值相对子力价值是小量（几十分），只在子力相等时起决定作用，
+     * 不会让 AI 为了占位而丢子。
+     *
+     * @param {string} p 棋子字符
+     * @param {number} row 行（0 = 黑方底线）
+     * @param {number} col 列
+     */
+    positionBonus(p, row, col) {
+      const isRedPiece = p === p.toUpperCase()
+      const type = p.toLowerCase()
+      // 归一化为「自己视角的推进行数」：越大表示越深入敌阵
+      const adv = isRedPiece ? (9 - row) : row
+      // 距中路的偏离量，0 表示正好在中线
+      const offCenter = Math.abs(col - 4)
+
+      if (type === 'p') {
+        // 兵卒：未过河几乎没有攻击价值，过河后递增
+        const crossed = isRedPiece ? (row <= 4) : (row >= 5)
+        if (!crossed) return 0
+        return 25 + adv * 12 + (4 - offCenter) * 4
+      }
+      if (type === 'n') {
+        // 马：边马是弱马。col 0/8 扣分，中心加分
+        const edgePenalty = (col === 0 || col === 8) ? -20 : 0
+        return (4 - offCenter) * 6 + edgePenalty
+      }
+      if (type === 'r') {
+        // 车：占中线与要道
+        return (4 - offCenter) * 7 + 8
+      }
+      if (type === 'c') {
+        // 炮：中路炮威力大
+        return (4 - offCenter) * 5
+      }
+      return 0
     },
 
     /**
@@ -693,7 +851,11 @@ export default {
         const p = board[i]
         if (!p) continue
         const v = VAL[p.toLowerCase()] || 0
-        score += (pieceSide(p) === side) ? v : -v
+        // 子力价值 + 位置价值。位置价值是小量，只在子力相等时决定选择，
+        // 避免 AI 在所有同子力走法里随机挑一个（旧版就是这样，
+        // 走出来毫无棋理，这是「弱智」感的主要来源之一）。
+        const pos = this.positionBonus(p, Math.floor(i / COLS), i % COLS)
+        score += (pieceSide(p) === side) ? (v + pos) : -(v + pos)
       }
 
       const opp = side === RED ? BLACK : RED

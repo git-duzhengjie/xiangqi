@@ -424,6 +424,58 @@ class SoundService {
     return this.enabled
   }
 
+  /**
+   * 彻底重置音效链路，等价于用户手动「关一次音效再打开」，但更干净。
+   *
+   * 背景：首次启动无声的问题反复修了三次都没根治。用户反馈的规律始终
+   * 一致 —— 手动把音效关掉再打开，声音立刻就正常了。既然这条路径经过
+   * 真机验证确实有效，就直接把它自动化，不再依赖对「哪个环节尚未就绪」
+   * 的推断。
+   *
+   * 做的事情比手动关开更彻底：
+   *   1. 销毁并清空全部实例池（等同 stopAll 的效果）
+   *   2. 清掉 dir 与 dirIsFallback，强制下次重新解析音频目录
+   *   3. 清掉 audioOptionApplied 与 audioOptionOk，强制重新下发
+   *      uni.setInnerAudioOption（obeyMuteSwitch 等配置）
+   *   4. 立即重新预热一遍
+   *
+   * 第 2、3 步是手动关开做不到的：那些一次性标记会一直留在内存里，
+   * 即便实例重建了，路径与音频配置仍可能停留在启动初期的错误状态。
+   *
+   * 注意：不改动 this.enabled，用户自己的音效开关偏好必须保持原样。
+   */
+  resetPipeline() {
+    // 第一步：销毁全部实例。innerAudioContext 是原生资源，
+    // 只把引用丢掉会泄漏原生层的 MediaPlayer，必须显式 destroy。
+    try {
+      Object.values(this.pools).forEach(pool => {
+        pool.forEach(ctx => {
+          try { ctx.stop() } catch (e) {}
+          try { ctx.destroy() } catch (e) {}
+        })
+      })
+    } catch (e) {}
+    this.pools = {}
+    this.cursor = {}
+    this.ready = false
+
+    // 第二步：清掉路径缓存，强制重新解析。
+    // 启动早期 plus 未就绪时只能拿到兜底的相对路径，
+    // 这里清零后下次 ensureDir 会重新走一遍 convertLocalFileSystemURL。
+    this.dir = ''
+    this.dirIsFallback = false
+
+    // 第三步：清掉音频配置标记，强制重新下发全局设置。
+    // obeyMuteSwitch=false 必须真正生效，否则音效会被系统静音键吞掉。
+    this.audioOptionApplied = false
+    this.audioOptionOk = false
+    this.lastError = ''
+
+    // 第四步：立刻重新预热。此时若 plus 已就绪，就能一次拿到
+    // file:// 真实路径并把配置下发成功，第一声就是对的。
+    this.preload()
+  }
+
   stopAll() {
     // 注意：stop() 会使实例进入 Stopped 态、后续无法直接 play，
     // 所以停完必须把池重建，否则重新开启音效后会发现“再也不响了”。

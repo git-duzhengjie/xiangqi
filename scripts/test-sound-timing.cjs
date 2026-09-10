@@ -1,131 +1,142 @@
 /**
- * 用桩环境模拟 sound.js 的真实时序，验证首次启动能否出声。
+ * 验证 resetPipeline 能否救回「首次启动无声」。
  *
- * 之前两次修复都"看着对"但上机还是没声，原因是只做了静态字符串校验，
- * 没有真正跑一遍状态流转。这里把 uni / plus 都桩掉，
- * 按真机的三种时序各跑一遍，直接断言最终有没有用正确路径播出声音。
+ * 前三次修复都只做静态校验，看着对但上机没声。这里把 uni / plus 桩掉，
+ * 严格按真机时序跑：先在 plus 未就绪时 preload（模拟对局页 onLoad），
+ * 再在 plus 就绪后调 resetPipeline（模拟 App.vue 的自动重置），
+ * 最后断言播放用的是 file:// 真实路径。
  */
 const fs = require('fs');
-const path = require('path');
-
 const SRC = fs.readFileSync('app/utils/sound.js', 'utf8');
 
-function runScenario(name, opts) {
-  const log = [];
-  const created = [];   // 记录每个实例的 src
-  const played = [];    // 记录真正 play 的 src
-
-  // ---- 桩：plus ----
+function build(opts) {
+  const played = [];
+  const optionCalls = [];
   let plusReady = opts.plusReadyAtStart;
+  let optionWorks = opts.optionWorksAtStart;
+
   const plusStub = {
     get io() {
       if (!plusReady) return undefined;
-      return {
-        convertLocalFileSystemURL: (p) => '/data/app/xiangqi/' + p.replace('_www/', '')
-      };
+      return { convertLocalFileSystemURL: (p) => '/data/app/xiangqi/' + p.replace('_www/', '') };
     }
   };
-
-  // ---- 桩：uni ----
-  let optionOk = opts.audioOptionWorksAtStart;
   const store = {};
   const uniStub = {
     getStorageSync: (k) => store[k] !== undefined ? store[k] : '',
     setStorageSync: (k, v) => { store[k] = v; },
-    setInnerAudioOption: opts.hasSetInnerAudioOption
-      ? (cfg) => {
-          if (!optionOk) {
-            log.push('setInnerAudioOption 调用但失败');
-            if (cfg.fail) cfg.fail({ errMsg: 'not ready' });
-            return;
-          }
-          log.push('setInnerAudioOption 成功 obeyMuteSwitch=' + cfg.obeyMuteSwitch);
-        }
-      : undefined,
-    createInnerAudioContext: () => {
-      const ctx = {
-        _src: '', loop: false, autoplay: false, volume: 1,
-        set src(v) { this._src = v; },
-        get src() { return this._src; },
-        play() { played.push(this._src); },
-        stop() {}, destroy() {}, seek() {},
-        onError() {}, onCanplay() {}, onPlay() {}, onEnded() {}
-      };
-      created.push(ctx);
-      return ctx;
-    }
+    setInnerAudioOption: (cfg) => {
+      if (!optionWorks) {
+        optionCalls.push('fail');
+        if (cfg.fail) cfg.fail({ errMsg: 'audio module not ready' });
+        return;
+      }
+      optionCalls.push('ok:obeyMuteSwitch=' + cfg.obeyMuteSwitch);
+    },
+    createInnerAudioContext: () => ({
+      _src: '', loop: false, autoplay: false, volume: 1, obeyMuteSwitch: true,
+      set src(v) { this._src = v; }, get src() { return this._src; },
+      play() { played.push(this._src); },
+      stop() {}, destroy() {}, seek() {},
+      onError() {}, onCanplay() {}, onPlay() {}, onEnded() {}
+    })
   };
 
-  // ---- 加载模块（把 export default 换成赋值给 module.exports）----
-  const code = SRC
-    .replace(/export default new SoundService\(\)/, 'module.exports = new SoundService()')
-    .replace(/\/\/ #ifdef[\s\S]*?\/\/ #endif/g, m => m);  // 保留
-
+  const code = SRC.replace(/export default new SoundService\(\)/, 'module.exports = new SoundService()');
   const mod = { exports: {} };
   const fn = new Function('uni', 'plus', 'module', 'console', 'document', 'setTimeout', code);
-  const consoleStub = { log(){}, warn(){}, error(){} };
-  fn(uniStub, plusStub, mod, consoleStub, { addEventListener(){} }, (f) => f);
-  const sound = mod.exports;
+  fn(uniStub, plusStub, mod, { log(){}, warn(){}, error(){} }, { addEventListener(){} }, (f) => f);
 
-  // ---- 时序 1：对局页 onLoad 调 preload（此时可能 plus 未就绪）----
-  sound.preload();
-  log.push('after preload#1 dir=' + sound.dir + ' fallback=' + sound.dirIsFallback + ' ready=' + sound.ready);
-
-  // ---- 时序 2：plusready 触发（App.vue 的预热）----
-  if (opts.plusBecomesReady) {
-    plusReady = true;
-    optionOk = true;
-    sound.preload();
-    log.push('after preload#2 dir=' + sound.dir + ' fallback=' + sound.dirIsFallback + ' ready=' + sound.ready);
-  }
-
-  // ---- 时序 3：用户点棋子，播放音效 ----
-  played.length = 0;
-  sound.play('move');
-
-  const ok = played.length > 0 && played[0].indexOf('file://') === 0;
-
-  console.log('===== ' + name + ' =====');
-  log.forEach(l => console.log('  ' + l));
-  console.log('  播放的 src: ' + (played[0] || '(无)'));
-  console.log('  结果: ' + (ok ? '[PASS] 有声，且路径正确' : '[FAIL] 无声或路径错误'));
-  console.log('');
-  return ok;
+  return {
+    sound: mod.exports,
+    played,
+    optionCalls,
+    makeReady: () => { plusReady = true; optionWorks = true; }
+  };
 }
 
-let allOk = true;
+let pass = 0, fail = 0;
+function check(label, cond) {
+  if (cond) { pass++; console.log('  [OK]   ' + label); }
+  else { fail++; console.log('  [FAIL] ' + label); }
+}
 
-// 场景 A：最糟情况 —— preload 时 plus 未就绪、音频配置也没生效，之后才就绪
-allOk &= runScenario('A. plus 延迟就绪（真机最常见，即老板遇到的情况）', {
-  plusReadyAtStart: false,
-  audioOptionWorksAtStart: false,
-  hasSetInnerAudioOption: true,
-  plusBecomesReady: true
-});
+console.log('===== 场景 1：老板遇到的情况（plus 延迟就绪）=====');
+{
+  const env = build({ plusReadyAtStart: false, optionWorksAtStart: false });
 
-// 场景 B：plus 一开始就绪（理想情况）
-allOk &= runScenario('B. plus 启动即就绪', {
-  plusReadyAtStart: true,
-  audioOptionWorksAtStart: true,
-  hasSetInnerAudioOption: true,
-  plusBecomesReady: false
-});
+  // 对局页 onLoad
+  env.sound.preload();
+  console.log('  preload 后: dir=' + env.sound.dir + ' fallback=' + env.sound.dirIsFallback);
+  env.played.length = 0;
+  env.sound.play('move');
+  const beforeSrc = env.played[0] || '(无)';
+  console.log('  重置前播放: ' + beforeSrc);
 
-// 场景 C：基座不支持 setInnerAudioOption，但 plus 会就绪
-allOk &= runScenario('C. 基座无 setInnerAudioOption', {
-  plusReadyAtStart: false,
-  audioOptionWorksAtStart: false,
-  hasSetInnerAudioOption: false,
-  plusBecomesReady: true
-});
+  // plus 就绪，App.vue 自动执行重置
+  env.makeReady();
+  env.sound.resetPipeline();
+  console.log('  重置后: dir=' + env.sound.dir + ' fallback=' + env.sound.dirIsFallback + ' ready=' + env.sound.ready);
+  console.log('  音频配置调用记录: ' + env.optionCalls.join(' -> '));
 
-// 场景 D：plus 始终不就绪（极端兜底，只要不崩就算过）
-runScenario('D. plus 始终不就绪（仅验证不崩溃）', {
-  plusReadyAtStart: false,
-  audioOptionWorksAtStart: false,
-  hasSetInnerAudioOption: true,
-  plusBecomesReady: false
-});
+  env.played.length = 0;
+  env.sound.play('move');
+  const afterSrc = env.played[0] || '(无)';
+  console.log('  重置后播放: ' + afterSrc);
 
-console.log(allOk ? '★ 关键场景 A/B/C 全部通过' : '★ 存在失败场景，需继续修');
-process.exit(allOk ? 0 : 1);
+  check('重置后拿到 file:// 真实路径', afterSrc.indexOf('file://') === 0);
+  check('重置后 dirIsFallback 为 false', env.sound.dirIsFallback === false);
+  check('重置后 ready 为 true', env.sound.ready === true);
+  check('音频配置最终设置成功', env.optionCalls.some(c => c.indexOf('ok:') === 0));
+  check('obeyMuteSwitch 设为 false', env.optionCalls.some(c => c.indexOf('obeyMuteSwitch=false') >= 0));
+}
+
+console.log('');
+console.log('===== 场景 2：resetPipeline 幂等性（会被调 3 次）=====');
+{
+  const env = build({ plusReadyAtStart: true, optionWorksAtStart: true });
+  env.sound.preload();
+  env.sound.resetPipeline();
+  env.sound.resetPipeline();
+  env.sound.resetPipeline();
+  env.played.length = 0;
+  env.sound.play('move');
+  check('连续重置 3 次后依然有声', env.played.length > 0);
+  check('路径依然正确', (env.played[0] || '').indexOf('file://') === 0);
+}
+
+console.log('');
+console.log('===== 场景 3：重置不影响用户的开关偏好 =====');
+{
+  const env = build({ plusReadyAtStart: true, optionWorksAtStart: true });
+  env.sound.setEnabled(false);      // 用户主动关掉音效
+  env.sound.resetPipeline();
+  check('重置后仍保持关闭状态', env.sound.isEnabled() === false);
+  env.played.length = 0;
+  env.sound.play('move');
+  check('关闭状态下确实不播放', env.played.length === 0);
+
+  env.sound.setEnabled(true);
+  env.played.length = 0;
+  env.sound.play('move');
+  check('重新打开后正常播放', env.played.length > 0);
+}
+
+console.log('');
+console.log('===== 场景 4：plus 始终不就绪（不能崩）=====');
+{
+  let crashed = false;
+  try {
+    const env = build({ plusReadyAtStart: false, optionWorksAtStart: false });
+    env.sound.preload();
+    env.sound.resetPipeline();
+    env.sound.resetPipeline();
+    env.sound.play('move');
+  } catch (e) { crashed = true; console.log('  异常: ' + e.message); }
+  check('不抛异常', !crashed);
+}
+
+console.log('');
+console.log('通过 ' + pass + ' 项，失败 ' + fail + ' 项');
+console.log(fail === 0 ? '★ 全部通过' : '★ 存在失败');
+process.exit(fail === 0 ? 0 : 1);

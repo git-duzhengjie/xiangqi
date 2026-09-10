@@ -15,29 +15,42 @@ export default {
 
   methods: {
     /**
-     * 在 plus 就绪后预热音效。
+     * 启动后自动执行一次音效链路重置，等价于手动「关一次音效再打开」。
      *
-     * 音频目录要靠 plus.io.convertLocalFileSystemURL 换算成设备真实路径，
-     * 而对局页 onLoad 里的 preload 有可能赶在 plus 就绪之前跑，
-     * 那时只能拿到兜底的相对路径，Android 播放器打不开，于是首次进对局没声音。
+     * 为什么这么做：
+     * 首次启动无声的问题反复修了三次都没根治，但现象规律非常稳定 ——
+     * 只要手动把音效关掉再打开，声音立刻就正常。既然这条路径经过真机
+     * 反复验证确实有效，就直接把它自动化，不再依赖对「到底是哪个环节
+     * 尚未就绪」的推断。已知有效，比理论正确更重要。
      *
-     * sound.ensureDir 本身已经有兜底重试，但那要等到下一次 play 才会触发；
-     * 这里在应用启动阶段就把路径提前敲定，让第一声就是对的。
+     * 执行时机上做了三道保险，因为不同机型上 plus 与基座音频模块的
+     * 就绪时间差异很大：
+     *   1. plusready 事件触发时（正常情况）
+     *   2. 800ms 后补一次（plus 已就绪但音频模块略慢）
+     *   3. 2500ms 后再补一次（低端机型或冷启动较慢）
+     * resetPipeline 是幂等的，多跑几次只是重建实例，代价很小；
+     * 而少跑一次就可能又是整局无声。
      */
     warmUpSound() {
       // #ifdef APP-PLUS
-      const run = () => {
-        try { sound.preload() } catch (e) { console.warn('[App] 音效预热失败', e) }
+      const reset = (tag) => {
+        try {
+          sound.resetPipeline()
+          console.log('[App] 音效链路重置完成 @' + tag)
+        } catch (e) {
+          console.warn('[App] 音效重置失败 @' + tag, e)
+        }
       }
-      // plus 已经就绪就直接执行，否则等 plusready 事件
+
       if (typeof plus !== 'undefined' && plus.io) {
-        run()
+        reset('immediate')
       } else {
-        document.addEventListener('plusready', run, false)
-        // 兜底：个别机型 plusready 可能已经错过，延时再补一次。
-        // preload 内部有 ready 标记，重复调用不会重建实例。
-        setTimeout(run, 1500)
+        document.addEventListener('plusready', () => reset('plusready'), false)
       }
+
+      // 两道延时补射，应对 plusready 已错过或音频模块就绪较晚的机型。
+      setTimeout(() => reset('800ms'), 800)
+      setTimeout(() => reset('2500ms'), 2500)
       // #endif
     }
   }

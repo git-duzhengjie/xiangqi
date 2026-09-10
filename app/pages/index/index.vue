@@ -25,6 +25,27 @@
       </view>
     </view>
 
+    <view class="endgames">
+      <text class="sec-title">残局挑战</text>
+      <view
+        v-for="eg in endgames"
+        :key="eg.id"
+        class="level-card eg-card"
+        @click="startEndgame(eg.id)"
+      >
+        <view class="lc-left">
+          <text class="lc-name">{{ eg.name }}</text>
+          <text class="lc-desc">{{ eg.desc }}</text>
+        </view>
+        <view class="lc-right">
+          <text class="eg-goal" :class="{ 'eg-goal-draw': isDrawGoal(eg) }">
+            {{ goalLabel(eg) }}
+          </text>
+          <text class="lc-go">›</text>
+        </view>
+      </view>
+    </view>
+
     <view class="footer">
       <text class="ft-text" @click="showAbout">关于 / 开源许可</text>
     </view>
@@ -33,16 +54,38 @@
 
 <script>
 import { DIFFICULTY_LEVELS } from '@/utils/constants.js'
+import { ENDGAMES, ENDGAME_GOAL, goalText } from '@/utils/endgames.js'
 
 export default {
   data() {
     return {
-      levels: DIFFICULTY_LEVELS
+      levels: DIFFICULTY_LEVELS,
+      endgames: ENDGAMES
     }
   },
   methods: {
     startGame(level) {
       uni.navigateTo({ url: `/pages/game/game?level=${level}` })
+    },
+
+    /**
+     * 进入残局挑战。
+     *
+     * 不传 level：残局固定使用最高难度，由 game 页自行确定，
+     * 避免首页与对局页两处各自维护难度而不一致。
+     */
+    startEndgame(id) {
+      uni.navigateTo({ url: `/pages/game/game?endgame=${id}` })
+    },
+
+    // 目标判定与文案统一从常量取。
+    // 模板里直写字面量 'draw' 虽然能跑，但日后改动 ENDGAME_GOAL
+    // 很容易漏改这里，且首页与对局页会出现两套判断逻辑。
+    isDrawGoal(eg) {
+      return eg && eg.goal === ENDGAME_GOAL.DRAW
+    },
+    goalLabel(eg) {
+      return goalText(eg ? eg.goal : '')
     },
     showAbout() {
       uni.showModal({
@@ -90,6 +133,27 @@ export default {
   display: block;
 }
 .levels { flex: 1; }
+
+/* 残局板块：与难度列表并列展示，复用 level-card 的基础样式，
+   只用左侧色条与目标标签做区分，保持视觉一致 */
+.endgames { margin-top: 20rpx; }
+.eg-card {
+  border-left: 6rpx solid rgba(245, 222, 179, 0.45);
+}
+.eg-goal {
+  font-size: 22rpx;
+  color: #E9C46A;
+  border: 2rpx solid rgba(233, 196, 106, 0.5);
+  border-radius: 8rpx;
+  padding: 4rpx 12rpx;
+  margin-right: 16rpx;
+}
+/* 守和类目标用冷色区分：古谱名局的正解并非都是取胜，
+   颜色差异能让用户在列表里一眼分辨两类目标 */
+.eg-goal-draw {
+  color: #8ECAE6;
+  border-color: rgba(142, 202, 230, 0.5);
+}
 .level-card {
   display: flex;
   align-items: center;

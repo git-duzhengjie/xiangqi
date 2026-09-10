@@ -16,6 +16,7 @@ import {
   parseFen, toFen, initialState, genLegalMoves, genAllLegalMoves,
   applyMoveToBoard, isKingInCheck, isCheckmate, judgeResult, moveToChinese
 } from '@/utils/rules.js'
+import { ENDGAME_GOAL, findEndgame } from '@/utils/endgames.js'
 import engine from '@/utils/engine.js'
 import sound from '@/utils/sound.js'
 
@@ -44,6 +45,13 @@ export default {
       gameOver: false,
       result: GAME_RESULT.PLAYING,
       difficultyId: 2,
+
+      // ---- 残局挑战 ----
+      // startFen 是本局起始局面。普通对局为 INITIAL_FEN，残局为该局 FEN。
+      // 必须单独保存：引擎的 think/hint 都以「起始局面 + 着法序列」推演，
+      // 原代码这两处写死 INITIAL_FEN，残局下会让引擎与实际棋盘完全脱节。
+      startFen: INITIAL_FEN,
+      endgame: null,          // 当前残局对象，普通对局为 null
       showMenu: false,
       showMoves: false,
       engineMsg: '',
@@ -55,6 +63,13 @@ export default {
 
   computed: {
     difficultyName() {
+      // 残局显示局名与目标，比显示「难度：困难」更有信息量：
+      // 残局固定最高难度，显示难度等于没有区分度，
+      // 而「取胜 / 守和」是用户全程需要记住的目标。
+      if (this.endgame) {
+        const target = this.endgame.goal === ENDGAME_GOAL.DRAW ? '守和' : '取胜'
+        return `${this.endgame.name}（${target}）`
+      }
       const lv = DIFFICULTY_LEVELS.find(l => l.id === this.difficultyId)
       return lv ? `难度：${lv.name}` : '中国象棋'
     },
@@ -73,6 +88,11 @@ export default {
       return this.engineReady ? '就绪' : '未加载'
     },
     resultText() {
+      // 残局的胜负含义与普通对局不同：守和类残局里「和棋」就是过关。
+      // 直接沿用普通文案会把过关显示成中性的「和棋」，用户无法判断成败。
+      if (this.endgame) {
+        return this.endgamePassed ? '🏆 挑战成功！' : '💔 挑战失败'
+      }
       switch (this.result) {
         case GAME_RESULT.RED_WIN: return '🎉 您赢了！'
         case GAME_RESULT.BLACK_WIN: return '😢 您输了'
@@ -80,7 +100,35 @@ export default {
         default: return ''
       }
     },
+
+    /**
+     * 残局是否达成目标。
+     *
+     * 取胜类（win） —— 只有红胜算过关，和棋与输棋都算失败。
+     * 守和类（draw）—— 和棋是正解，红胜自然更好，只有被将死才失败。
+     *
+     * 古谱名局的正解并非都是取胜（如七星聚会的正解就是和棋），
+     * 若一律要求取胜反而违背棋理，所以每局各自标注目标。
+     */
+    endgamePassed() {
+      if (!this.endgame) return false
+      if (this.endgame.goal === ENDGAME_GOAL.DRAW) {
+        return this.result === GAME_RESULT.DRAW ||
+               this.result === GAME_RESULT.RED_WIN
+      }
+      return this.result === GAME_RESULT.RED_WIN
+    },
+
     resultSub() {
+      if (this.endgame) {
+        const target = this.endgame.goal === ENDGAME_GOAL.DRAW ? '守和' : '取胜'
+        if (this.endgamePassed) {
+          return `「${this.endgame.name}」${target}成功，共 ${this.history.length} 步`
+        }
+        // 失败时把目标说清楚，否则用户不知道自己差在哪里
+        const why = this.result === GAME_RESULT.DRAW ? '本局需要取胜，和棋不算过关' : '再试一次'
+        return `目标：${target}。${why}`
+      }
       const lv = DIFFICULTY_LEVELS.find(l => l.id === this.difficultyId)
       const name = lv ? lv.name : ''
       if (this.result === GAME_RESULT.RED_WIN) return `战胜「${name}」难度，共 ${this.history.length} 步`
@@ -90,7 +138,17 @@ export default {
   },
 
   onLoad(options) {
-    if (options && options.level) {
+    // 残局优先。残局固定使用最高难度：少子局面下弱引擎容易随手放水，
+    // 那样"过关"就没有意义了。
+    if (options && options.endgame) {
+      const eg = findEndgame(options.endgame)
+      if (eg) {
+        this.endgame = eg
+        this.startFen = eg.fen
+        const top = DIFFICULTY_LEVELS[DIFFICULTY_LEVELS.length - 1]
+        this.difficultyId = top ? top.id : 3
+      }
+    } else if (options && options.level) {
       this.difficultyId = parseInt(options.level, 10) || 2
     }
     this.initBoardSize()
@@ -153,7 +211,8 @@ export default {
     },
 
     resetGame() {
-      const st = initialState()
+      // 残局要还原到该残局的起始局面，不能用 initialState()（标准开局）。
+      const st = this.endgame ? parseFen(this.startFen) : initialState()
       this.board = st.board
       this.currentSide = RED
       this.selected = null
@@ -454,7 +513,7 @@ export default {
         return
       }
       this.thinking = true
-      const res = await engine.think(INITIAL_FEN, this.uciMoves)
+      const res = await engine.think(this.startFen, this.uciMoves)
       this.thinking = false
 
       if (!res.success || !res.bestmove) {
@@ -557,7 +616,7 @@ export default {
         return
       }
       uni.showLoading({ title: '分析中…' })
-      const res = await engine.hint(INITIAL_FEN, this.uciMoves)
+      const res = await engine.hint(this.startFen, this.uciMoves)
       uni.hideLoading()
       if (res.success && res.bestmove) {
         this.hintMove = this.parseUci(res.bestmove)

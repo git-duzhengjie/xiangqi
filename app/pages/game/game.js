@@ -9,7 +9,7 @@
  */
 
 import {
-  RED, BLACK, INITIAL_FEN, DIFFICULTY_LEVELS, GAME_RESULT,
+  RED, BLACK, INITIAL_FEN, DIFFICULTY_LEVELS, ENDGAME_ENGINE, GAME_RESULT,
   COLS, ROWS, PIECE_NAMES, pieceSide, moveToUci
 } from '@/utils/constants.js'
 import {
@@ -145,8 +145,11 @@ export default {
       if (eg) {
         this.endgame = eg
         this.startFen = eg.fen
-        const top = DIFFICULTY_LEVELS[DIFFICULTY_LEVELS.length - 1]
-        this.difficultyId = top ? top.id : 3
+        // 用残局专用参数，不取难度表最后一档。
+        // 残局是极端缺子局面，depth=10 深搜收益很小却最容易让原生引擎
+        // 出问题（实测走一步即导致模拟器进程崩溃，而 JS 规则层
+        // 36 个着法全链路零异常，问题在原生搜索侧）。
+        this.difficultyId = ENDGAME_ENGINE.id
       }
     } else if (options && options.level) {
       this.difficultyId = parseInt(options.level, 10) || 2
@@ -507,16 +510,47 @@ export default {
     /* ============ 引擎应招 ============ */
 
     async engineTurn() {
+      // 残局一律使用纯 JS 搜索，不碰原生引擎。
+      //
+      // 已确认的两个事实：
+      //   1. 崩溃在原生层 —— 模拟器整个进程挂掉，JS 异常做不到；
+      //   2. JS 规则层干净 —— 4 个残局 36 个着法全链路零异常
+      //      （scripts/repro-endgame-crash.cjs）。
+      // 根因尚未证实（设备离线抓不到 logcat），所以不去赌参数，
+      // 而是让残局彻底不依赖原生引擎：只要不调用它，就不会被它拖垮。
+      //
+      // 残局子力少、分支因子小，本地 alpha-beta 搜到 4 层已经很强，
+      // 且是毫秒级，完全够用。普通对局仍走原生 Pikafish，棋力不变。
+      if (this.endgame) {
+        this.localEngineTurn()
+        return
+      }
+
       if (!this.engineReady) {
         // 引擎不可用时的降级：随机合法走法（仅保证可玩）
         this.fallbackMove()
         return
       }
       this.thinking = true
-      const res = await engine.think(this.startFen, this.uciMoves)
+
+      // 引擎调用整体包 try。
+      // 残局下实测走一步会让整个模拟器崩溃，而 JS 规则层已验证完全干净
+      // （4 个残局 36 个着法全链路零异常），说明问题在原生搜索侧。
+      // 原生崩溃 JS 拦不住，但至少要做到：
+      //   1) 异常时不把 thinking 永久置 true，否则页面永远卡在「思考中」；
+      //   2) 任何异常都降级到纯 JS 的 fallbackMove，保证对局能继续。
+      let res = null
+      try {
+        res = await engine.think(this.startFen, this.uciMoves)
+      } catch (e) {
+        console.warn('[game] 引擎 think 异常，降级为本地走法', e)
+        this.thinking = false
+        this.fallbackMove()
+        return
+      }
       this.thinking = false
 
-      if (!res.success || !res.bestmove) {
+      if (!res || !res.success || !res.bestmove) {
         this.fallbackMove()
         return
       }
@@ -549,6 +583,108 @@ export default {
         from: { row: ROWS - 1 - fr, col: fc },
         to: { row: ROWS - 1 - tr, col: tc }
       }
+    },
+
+    /**
+     * 残局专用的本地搜索（alpha-beta 极小化极大）。
+     *
+     * 只在残局使用，不参与普通对局 —— 普通对局的开局与中局分支因子大，
+     * 纯 JS 搜索深度上不去，棋力不如原生 Pikafish。
+     * 但残局子力极少，4 层搜索配合子力价值评估已经相当准，
+     * 而且完全不依赖原生层，不会被原生崩溃影响。
+     */
+    localEngineTurn() {
+      this.thinking = true
+      // 让出一帧再算，否则"思考中"提示来不及渲染，界面像卡住
+      setTimeout(() => {
+        let best = null
+        try {
+          best = this.searchBest(this.board, BLACK, 4)
+        } catch (e) {
+          console.warn('[game] 本地搜索异常，降级为随机走法', e)
+        }
+        this.thinking = false
+        if (best && best.from && best.to) {
+          this.doMove(best.from, best.to)
+        } else {
+          // 搜索没结果说明已无着可走，交给 fallback 去裁决终局
+          this.fallbackMove()
+        }
+      }, 50)
+    },
+
+    /**
+     * 搜索最佳着法。
+     * @param {Array} board 当前棋盘
+     * @param {string} side  走子方
+     * @param {number} depth 搜索层数
+     * @returns {{from,to}|null}
+     */
+    searchBest(board, side, depth) {
+      const moves = genAllLegalMoves(board, side)
+      if (!moves.length) return null
+
+      let bestScore = -Infinity
+      let bestMoves = []
+      for (const mv of moves) {
+        const nb = applyMoveToBoard(board, mv.from, mv.to)
+        // 取负：对手视角的最优就是自己视角的最差
+        const sc = -this.alphaBeta(nb, side === RED ? BLACK : RED,
+          depth - 1, -Infinity, Infinity)
+        if (sc > bestScore) {
+          bestScore = sc
+          bestMoves = [mv]
+        } else if (sc === bestScore) {
+          // 同分随机，避免每局走得一模一样
+          bestMoves.push(mv)
+        }
+      }
+      return bestMoves.length
+        ? bestMoves[Math.floor(Math.random() * bestMoves.length)]
+        : null
+    },
+
+    /** alpha-beta 剪枝搜索，返回 side 视角的分数 */
+    alphaBeta(board, side, depth, alpha, beta) {
+      const moves = genAllLegalMoves(board, side)
+      // 无着可走：被将死或困死，都是极差局面
+      if (!moves.length) {
+        return isKingInCheck(board, side) ? -100000 - depth : -50000
+      }
+      if (depth <= 0) return this.evalBoard(board, side)
+
+      let best = -Infinity
+      for (const mv of moves) {
+        const nb = applyMoveToBoard(board, mv.from, mv.to)
+        const sc = -this.alphaBeta(nb, side === RED ? BLACK : RED,
+          depth - 1, -beta, -alpha)
+        if (sc > best) best = sc
+        if (best > alpha) alpha = best
+        if (alpha >= beta) break        // 剪枝
+      }
+      return best
+    },
+
+    /**
+     * 局面评估：子力价值 + 少量位置奖励。
+     * 返回 side 视角的分数，越大越有利。
+     */
+    evalBoard(board, side) {
+      // 残局里兵的价值被显著放大：过河兵能直接参与攻杀，
+      // 且往往是取胜的唯一资本，用开局的兵值会严重低估。
+      const VAL = { k: 100000, r: 900, c: 450, n: 400, b: 150, a: 150, p: 180 }
+      let score = 0
+      for (let i = 0; i < board.length; i++) {
+        const p = board[i]
+        if (!p) continue
+        const v = VAL[p.toLowerCase()] || 0
+        score += (pieceSide(p) === side) ? v : -v
+      }
+      // 将军加分，鼓励主动进攻而不是原地磨
+      const opp = side === RED ? BLACK : RED
+      if (isKingInCheck(board, opp)) score += 30
+      if (isKingInCheck(board, side)) score -= 30
+      return score
     },
 
     /** 引擎不可用时的傅底走法 */
